@@ -53,6 +53,81 @@ export interface Summary {
   isDelegate?: boolean;
 }
 
+/** Per-account change over a date range (`performance.spData.accountSummaries[]`). */
+export interface AccountSummary {
+  userAccountId?: number;
+  accountName?: string;
+  currentBalance?: number;
+  balanceAsOfEndDate?: number;
+  /** Balance change over the range, including deposits and withdrawals. */
+  dateRangeBalanceValueChange?: number;
+  /** Market gain/loss over the range, excluding deposits and withdrawals. */
+  dateRangePerformanceValueChange?: number;
+  oneDayBalanceValueChange?: number;
+  oneDayPerformanceValueChange?: number;
+  closedDate?: string | null;
+}
+
+/** `GET /data/performance`: investment, retirement, ESOP and ESPP accounts. */
+export interface Performance {
+  spData?: {
+    /**
+     * Daily rows: `date`, `aggregatePerformance`, plus one property per account named by its
+     * userAccountId (e.g. `"1527851081": 0.0123`) and a matching `"<id>Annotation"` string.
+     * Only `date` is used here (for the range shown in tooltips).
+     */
+    performanceHistory?: PerformanceRow[];
+    /** Changes over the dataset's whole range (90 days by default), plus one-day changes. */
+    accountSummaries?: AccountSummary[];
+  };
+}
+
+export interface PerformanceRow {
+  date?: string;
+  [key: string]: number | string | undefined;
+}
+
+/** `GET /data/netWorthHistory`: daily balances (default: last year). */
+export interface NetWorthHistory {
+  spData?: {
+    /**
+     * One row per day. `balances` keys are userAccountIds as strings; ignore keys
+     * ending in "Annotation".
+     */
+    histories?: {
+      date?: string;
+      balances?: Record<string, number | string | undefined>;
+    }[];
+  };
+}
+
+export interface Transaction {
+  userTransactionId?: number;
+  userAccountId?: number;
+  transactionDate?: string;
+  /** Always positive; `isCredit` gives the direction. */
+  amount?: number;
+  isCredit?: boolean;
+  isDuplicate?: boolean;
+  description?: string;
+  originalDescription?: string;
+  categoryName?: string;
+  transactionType?: string;
+  status?: string;
+  /** Investment transactions. */
+  price?: number;
+  quantity?: number;
+}
+
+/** `GET /data/transactions`: all accounts (default: month to date). */
+export interface Transactions {
+  spData?: {
+    startDate?: string;
+    endDate?: string;
+    transactions?: Transaction[];
+  };
+}
+
 export interface ApiErrorBody {
   error: string;
   httpStatus?: number | null;

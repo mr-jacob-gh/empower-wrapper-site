@@ -15,5 +15,8 @@ export const icons = {
   alert: svg(`<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17.2v.1"/>`),
   key: svg(`<circle cx="8" cy="15" r="4.5"/><path d="M11.2 11.8L20 3M16.5 6.5l3 3M14 9l2 2"/>`),
   logout: svg(`<path d="M9 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h3"/><path d="M15 16l4-4-4-4M19 12H9"/>`),
+  chevronRight: svg(`<path d="M9.5 6l6 6-6 6"/>`),
+  chevronLeft: svg(`<path d="M14.5 6l-6 6 6 6"/>`),
+  arrowLeft: svg(`<path d="M19 12H5"/><path d="M11 6l-6 6 6 6"/>`),
   plug: svg(`<path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0z"/><path d="M12 17v4"/>`),
 };

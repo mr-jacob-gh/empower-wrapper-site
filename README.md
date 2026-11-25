@@ -60,15 +60,56 @@ header. The service must:
 
 Use your exact Pages origin rather than `*`.
 
+## Investment trends
+
+Selecting the **Investments** tile shows a 24-hour and a 90-day trend on each investment,
+retirement, ESOP and ESPP account: the market gain/loss in dollars, **excluding deposits and
+withdrawals**, and that as a percent of the balance at the start of the period.
+
+Both come straight from `accountSummaries` in the **saved** `GET /data/performance` file, whose
+default range is the last 90 days: `oneDayPerformanceValueChange` for 24h and
+`dateRangePerformanceValueChange` for 90d. Hovering over the 90d figure shows the exact dates the
+file covers. It's a file read on the service, not an Empower call, so it's fast and works even
+when the Empower session has ended.
+
+The file is read when you open the Investments panel, reused for 5 minutes, re-read with the
+5-minute polling while the panel is open, and re-read on Refresh. Trend data is held **in memory
+only**, for the open tab. It's never written to browser storage, the repo, GitHub or the service,
+and it's dropped when you forget the API key.
+
+## Account screen
+
+Selecting an investment, retirement, ESOP or ESPP account (anywhere on its row) opens its own
+screen at `#/account/<userAccountId>`, so the browser's back button and deep links work. On
+phones the dashboard slides off to the left as the account slides in from the right, and the
+reverse on **Back to summary**; on wider screens it's a short fade. Returning puts you back where
+you were on the dashboard.
+
+The screen shows the account's details and its 24h / 90d trends, a balance chart, and its
+transactions, 10 per page. Everything comes from saved files (no Empower calls), kept in memory
+for 5 minutes and never stored anywhere else:
+
+- **Balance chart:** `GET /data/netWorthHistory` (daily balance for every account, last year),
+  filtered to the account. **90d** plots the last 90 days; **24h** compares the last two daily
+  balances, since the service has no intraday data. Balances include deposits and withdrawals
+  (unlike the 24h/90d pills, which are market gain/loss). Hover or use the arrow keys for each
+  day's value; **Show values** lists them all.
+- **Transactions:** `GET /data/transactions`, filtered to the account (duplicates dropped),
+  newest first. The saved file covers **month to date** only.
+
 ## Structure
 
 ```
 src/
-  api.ts        API client (X-API-Key, GET /data/summary, Last-Modified → "last fetched")
+  api.ts        API client (X-API-Key; saved summary, performance, netWorthHistory, transactions)
   auth.ts       Stores the API key in this browser only
-  types.ts      Types for the API's summary dataset
-  dashboard.ts  Views: net worth, category tiles, account panels, key prompt, errors
-  main.ts       App shell, key prompt flow, refresh + 5-minute polling
+  types.ts      Types for the API's summary and performance datasets
+  dashboard.ts  Views: net worth, category tiles, account panels, trend pills, key prompt, errors
+  account.ts    Account screen: details, balance chart card, paginated transactions
+  chart.ts      Single-series SVG line chart with crosshair tooltip and keyboard stepping
+  cache.ts      In-memory, per-tab cache for saved datasets
+  trends.ts     24h / 90-day investment trends from the saved performance file, in-memory cache
+  main.ts       App shell, key prompt flow, refresh + 5-minute polling, routing + screen transitions
   config.ts     Personal settings (emergency fund account and monthly expenses)
   format.ts     Currency, percent and relative-time formatting
   icons.ts      Inline SVG icons

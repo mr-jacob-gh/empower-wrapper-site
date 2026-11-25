@@ -1,4 +1,4 @@
-import type { ApiErrorBody, Summary } from "./types";
+import type { ApiErrorBody, NetWorthHistory, Performance, Summary, Transactions } from "./types";
 import { getApiKey } from "./auth";
 
 /**
@@ -69,4 +69,22 @@ async function getJson<T>(path: string, signal?: AbortSignal): Promise<Fetched<T
 /** The saved `summary` dataset. Reads the service's file; does not call Empower. */
 export function getSummary(signal?: AbortSignal): Promise<Fetched<Summary>> {
   return getJson<Summary>("/data/summary", signal);
+}
+
+/**
+ * The saved `performance` dataset: last 90 days of per-account performance for
+ * investment-type accounts. Reads the service's file; does not call Empower.
+ */
+export function getPerformance(signal?: AbortSignal): Promise<Fetched<Performance>> {
+  return getJson<Performance>("/data/performance", signal);
+}
+
+/** The saved `netWorthHistory` dataset: daily balances, last year (~270 KB). No Empower call. */
+export function getNetWorthHistory(signal?: AbortSignal): Promise<Fetched<NetWorthHistory>> {
+  return getJson<NetWorthHistory>("/data/netWorthHistory", signal);
+}
+
+/** The saved `transactions` dataset: all accounts, month to date. No Empower call. */
+export function getTransactions(signal?: AbortSignal): Promise<Fetched<Transactions>> {
+  return getJson<Transactions>("/data/transactions", signal);
 }

@@ -1,7 +1,8 @@
 import type { Account, Summary } from "./types";
-import { esc, money, moneyCents, moneyParts, percent, timeAgo } from "./format";
+import { esc, money, moneyCents, moneyParts, percent, shortDate, signedMoney, signedPercent, timeAgo } from "./format";
 import { icons } from "./icons";
 import { EMERGENCY_FUND } from "./config";
+import type { Change, TrendState } from "./trends";
 
 // ---------- Categories (one per tile) and account groups ----------
 
@@ -14,7 +15,7 @@ const CATEGORY_LABEL: Record<Category, string> = {
   loans: "Loan",
 };
 
-interface GroupInfo {
+export interface GroupInfo {
   label: string;
   icon: string;
   liability: boolean;
@@ -39,7 +40,7 @@ const GROUPS: Record<string, GroupInfo> = {
  * because some accounts (e.g. loans) arrive with accountTypeGroup: null and
  * only productType: "LOAN".
  */
-function groupInfo(account: Account): GroupInfo {
+export function groupInfo(account: Account): GroupInfo {
   const known =
     (account.accountTypeGroup ? GROUPS[account.accountTypeGroup] : undefined) ??
     (account.productType ? GROUPS[account.productType] : undefined);
@@ -96,10 +97,28 @@ function tiles(s: Summary): string {
   </section>`;
 }
 
-interface Row {
+export interface Row {
   account: Account;
   isEmpower: boolean;
 }
+
+/** Open accounts from the summary, Empower's own first. */
+function openRows(s: Summary): Row[] {
+  return [
+    ...(s.empowerAccounts ?? []).map((account) => ({ account, isEmpower: true })),
+    ...(s.aggregatedAccounts ?? []).map((account) => ({ account, isEmpower: false })),
+  ].filter((r) => !r.account.closedDate);
+}
+
+/** The open account with this userAccountId, if any. */
+export function findAccount(s: Summary, id: number): (Row & { info: GroupInfo }) | null {
+  const row = openRows(s).find((r) => r.account.userAccountId === id);
+  return row ? { ...row, info: groupInfo(row.account) } : null;
+}
+
+/** Investment-type accounts open their own screen. */
+export const opensDetail = (info: GroupInfo, account: Account): boolean =>
+  info.category === "investments" && typeof account.userAccountId === "number";
 
 /** "~3.9 months" of necessary expenses covered by the emergency fund. */
 function emergencyFundBadge(balance: number): string {
@@ -122,15 +141,23 @@ function accountRow({ account: a, isEmpower }: Row, info: GroupInfo): string {
   const synced = a.lastRefreshed ? `Synced ${timeAgo(new Date(a.lastRefreshed))}` : "";
   const sub = [a.firmName, synced].filter(Boolean).map(esc).join(" · ");
   const fund = a.userAccountId === EMERGENCY_FUND.userAccountId ? emergencyFundBadge(bal) : "";
+  // Investment-type rows get a slot that applyTrends() fills in.
+  const detail = opensDetail(info, a);
+  const trend = detail ? `<div class="acct__trends" data-trend-id="${a.userAccountId}"></div>` : "";
+  const mods = [fund && "acct--fund", trend && "acct--trend", detail && "acct--link"].filter(Boolean).join(" ");
+  const name = esc(a.name || a.originalName || "Account");
+  // The whole row opens the account (main.ts); the link keeps it reachable by keyboard.
+  const title = detail ? `<a class="acct__open" href="#/account/${a.userAccountId}">${name}</a>` : name;
   return `
-  <li class="acct${fund ? " acct--fund" : ""}">
+  <li class="acct${mods ? ` ${mods}` : ""}"${detail ? ` data-account-id="${a.userAccountId}"` : ""}>
     <div class="acct__icon">${info.icon}</div>
     <div class="acct__text">
-      <div class="acct__name">${esc(a.name || a.originalName || "Account")}${isEmpower ? ` <span class="tag">Empower</span>` : ""}</div>
+      <div class="acct__name">${title}${isEmpower ? ` <span class="tag">Empower</span>` : ""}</div>
       <div class="acct__sub">${sub}</div>
     </div>
-    ${fund}
+    ${fund}${trend}
     <div class="acct__bal${signed < 0 ? " is-neg" : ""}">${moneyCents(signed)}</div>
+    ${detail ? `<span class="acct__chev" aria-hidden="true">${icons.chevronRight}</span>` : ""}
   </li>`;
 }
 
@@ -146,10 +173,7 @@ function byInstitutionThenName(x: Row, y: Row): number {
 }
 
 function accountsSection(s: Summary): string {
-  const rows: Row[] = [
-    ...(s.empowerAccounts ?? []).map((account) => ({ account, isEmpower: true })),
-    ...(s.aggregatedAccounts ?? []).map((account) => ({ account, isEmpower: false })),
-  ].filter((r) => !r.account.closedDate);
+  const rows = openRows(s);
 
   const groups = new Map<string, { info: GroupInfo; rows: Row[] }>();
   for (const r of rows) {
@@ -226,6 +250,58 @@ export function applySelection(container: ParentNode, selected: Category | null)
   const empty = section.querySelector<HTMLElement>("[data-role='empty']")!;
   empty.textContent = `No open ${label.toLowerCase()} accounts.`;
   empty.hidden = count > 0;
+}
+
+// ---------- Trends (investment rows) ----------
+
+const DAY_TIP = "Market gain/loss over the last trading day, excluding deposits and withdrawals.";
+
+function trendPill(label: string, c: Change | null | undefined, tip: string): string {
+  if (!c) {
+    return `<span class="trend trend--none" title="${esc(tip)}"><span class="trend__label">${label}</span><span class="trend__value">—</span></span>`;
+  }
+  const dir = c.value > 0 ? "up" : c.value < 0 ? "down" : "flat";
+  const pct = c.fraction === null ? "" : `<span class="trend__pct">${esc(signedPercent(c.fraction))}</span>`;
+  return `
+    <span class="trend trend--${dir}" title="${esc(tip)}">
+      <span class="trend__label">${label}</span>
+      <span class="trend__value">${esc(signedMoney(c.value))}</span>${pct}
+    </span>`;
+}
+
+const loadingPill = (label: string): string =>
+  `<span class="trend is-loading" aria-hidden="true"><span class="trend__label">${label}</span><span class="trend__value"></span></span>`;
+
+/** Fill each investment row's trend slot from the current state. Call after each render and state change. */
+export function applyTrends(container: ParentNode, state: TrendState): void {
+  for (const slot of container.querySelectorAll<HTMLElement>("[data-trend-id]")) {
+    const id = Number(slot.dataset.trendId);
+    switch (state.status) {
+      case "idle":
+        slot.innerHTML = "";
+        slot.removeAttribute("aria-busy");
+        break;
+      case "loading":
+        slot.innerHTML = loadingPill("24h") + loadingPill("90d");
+        slot.setAttribute("aria-busy", "true");
+        break;
+      case "error":
+        slot.innerHTML =
+          trendPill("24h", null, `Trend unavailable: ${state.message}`) +
+          trendPill("90d", null, `Trend unavailable: ${state.message}`);
+        slot.removeAttribute("aria-busy");
+        break;
+      case "ready": {
+        const t = state.byId.get(id);
+        const span = state.from && state.to ? `${shortDate(state.from)} – ${shortDate(state.to)}` : "over the last 90 days";
+        const none = "No performance data for this account.";
+        const rangeTip = t?.range ? `Market gain/loss ${span}, excluding deposits and withdrawals.` : none;
+        slot.innerHTML = trendPill("24h", t?.day, t?.day ? DAY_TIP : none) + trendPill("90d", t?.range, rangeTip);
+        slot.removeAttribute("aria-busy");
+        break;
+      }
+    }
+  }
 }
 
 export function loadingHtml(): string {

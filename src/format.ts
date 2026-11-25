@@ -27,6 +27,33 @@ export function moneyParts(n: number): [string, string] {
 /** 0.123 -> "12.3%" */
 export const percent = (fraction: number): string => pct.format(fraction);
 
+const usd0Signed = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  maximumFractionDigits: 0,
+  signDisplay: "exceptZero",
+});
+const pctSigned = new Intl.NumberFormat("en-US", {
+  style: "percent",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+  signDisplay: "exceptZero",
+});
+const minus = (s: string): string => s.replace("-", "−");
+
+/** +$1,234 / −$56 */
+export const signedMoney = (n: number): string => minus(usd0Signed.format(n));
+
+/** 0.0042 -> "+0.42%" */
+export const signedPercent = (fraction: number): string => minus(pctSigned.format(fraction));
+
+/** "2026-10-25" -> "Oct 25" */
+export function shortDate(ymd: string): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  if (!y || !m || !d) return ymd;
+  return new Date(y, m - 1, d).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
 const rtf = new Intl.RelativeTimeFormat("en-US", { numeric: "auto" });
 
 /** "4 minutes ago", "yesterday", ... */
