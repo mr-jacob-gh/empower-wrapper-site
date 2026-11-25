@@ -1,0 +1,726 @@
+openapi: 3.1.0
+info:
+  title: Empower Local Service API
+  version: 1.0.0
+  description: |
+    Read-only access to one person's Empower (Personal Dashboard) financial data, collected by a
+    Windows service running on their own PC.
+
+    ## How it works
+    - The service calls Empower every 15 minutes and saves each **dataset** as a JSON file.
+      `GET /data/{name}` returns the saved file. It does **not** call Empower, so it's fast and
+      safe to call as often as you like.
+    - Each dataset is the **raw Empower response**, unmodified. Most are wrapped as
+      `{ "spHeader": {...}, "spData": <data> }`; `summary` is not wrapped. The schemas below list
+      the fields that matter; real responses contain more (`additionalProperties` is allowed
+      everywhere).
+    - A file is only replaced by a successful response, so a dataset can be stale but never broken.
+      Check freshness with `GET /data` (`savedAt`) or the `Last-Modified` header.
+
+    ## Calls that do reach Empower (use sparingly)
+    - `GET /data/{name}?startDate=&endDate=`: live fetch of a custom date range for the four
+      date-based datasets. Returns the result without saving it. Takes about 1-5 s.
+    - `POST /refresh`: re-fetches and saves all 12 datasets, one after another. It can take up to
+      a minute. Only use it when the data must be newer than the last 15-minute run.
+    - `POST /jobs/{name}/run`: the same, for one dataset.
+
+    ## Session health
+    The service depends on a logged-in Empower session that the owner renews by hand.
+    `GET /status` → the `querySession` job: `lastRunOk: false` (with `lastAuthLevel` other than
+    `SESSION_AUTHENTICATED`, or an `lastError` mentioning an expired session) means the session
+    has ended. Saved data is still served but will stop updating. Live fetches and refreshes fail
+    with 502 until the owner logs in again. An agent can't fix this, so report it to the user.
+
+    ## Conventions
+    - Money amounts are numbers in USD. In `transactions`, `amount` is always positive; use
+      `isCredit` (true = money in) or `isCashIn` / `isCashOut` for the direction.
+    - Dates are `yyyy-MM-dd` strings. Fields like `lastRefreshed` and `createdDate` are Unix
+      epoch **milliseconds**.
+    - `userAccountId` (integer) identifies an account across every dataset. In
+      `netWorthHistory.histories[].balances` and `performance.performanceHistory[]` it appears as a
+      property **name** (a string, e.g. `"1527851088"`), next to `"<id>Annotation"` text fields.
+    - `transactions[].categoryId` joins to `categories[].transactionCategoryId`.
+
+    ## Privacy
+    This is personal financial and identity data (`emergencySavings.whatIf` and
+    `debtPayment.whatIf` include names, birthdays and income). Only use it for what the user asked.
+    There is no authentication, because the API listens on localhost only.
+servers:
+  - url: http://localhost:5055
+    description: The service on the user's PC (localhost only)
+
+tags:
+  - name: data
+    description: Saved datasets (no Empower call unless a date range is passed)
+  - name: control
+    description: Status and on-demand fetching from Empower
+
+paths:
+  /:
+    get:
+      tags: [control]
+      summary: Service info
+      operationId: getServiceInfo
+      responses:
+        "200":
+          description: Service name, endpoint list and dataset names.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  service: { type: string, example: EmpowerLocalService }
+                  endpoints: { type: array, items: { type: string } }
+                  datasets: { type: array, items: { $ref: "#/components/schemas/DatasetName" } }
+
+  /data:
+    get:
+      tags: [data]
+      summary: List datasets with freshness and default date ranges
+      description: Start here. Shows when each dataset was last saved and whether its last refresh worked.
+      operationId: listDatasets
+      responses:
+        "200":
+          description: One entry per dataset, in refresh order.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/DatasetInfo" }
+
+  /data/all:
+    get:
+      tags: [data]
+      summary: All saved datasets in one object
+      description: |
+        `{ "<datasetName>": <saved JSON or null> }` for all 12 datasets. Reads files only.
+        The response is large (the full year of `netWorthHistory` alone is ~270 KB); prefer
+        `/data/{name}` when you only need some of it.
+      operationId: getAllDatasets
+      responses:
+        "200":
+          description: Every dataset keyed by name; `null` for one that hasn't been saved yet.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AllDatasets" }
+
+  /data/{name}:
+    get:
+      tags: [data]
+      summary: One dataset (saved file, or live for a custom date range)
+      description: |
+        - **No dates:** returns the saved file (`X-Data-Source: file`). No Empower call.
+        - **`startDate` and/or `endDate`** (only `netWorthHistory`, `transactions`, `investments`,
+          `performance`): fetches that range from Empower live (`X-Data-Source: live`) and returns
+          it **without** changing the saved file. A missing bound uses the dataset's default
+          (see `GET /data`).
+
+        The response body depends on `name`; see `AnyDataset` for the schema of each.
+      operationId: getDataset
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { $ref: "#/components/schemas/DatasetName" }
+        - name: startDate
+          in: query
+          required: false
+          description: First day (inclusive), `yyyy-MM-dd`. Date-based datasets only.
+          schema: { type: string, format: date, example: "2026-01-01" }
+        - name: endDate
+          in: query
+          required: false
+          description: Last day (inclusive), `yyyy-MM-dd`. Date-based datasets only.
+          schema: { type: string, format: date, example: "2026-03-31" }
+      responses:
+        "200":
+          description: The dataset.
+          headers:
+            X-Data-Source:
+              description: "`file` (saved) or `live` (fetched for the requested range)."
+              schema: { type: string, enum: [file, live] }
+            X-Date-Range:
+              description: Live responses only. The range fetched, e.g. `2026-01-01..2026-03-31`.
+              schema: { type: string }
+            Last-Modified:
+              description: File responses only. When the file was saved.
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AnyDataset" }
+        "400":
+          description: Bad date format, startDate after endDate, or dates passed to a dataset that doesn't take them.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: Unknown dataset, or not saved yet (check `GET /status`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "502":
+          description: Live fetch failed at Empower (usually the session ended; see `GET /status`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UpstreamError" }
+
+  /getSummary:
+    get:
+      tags: [data]
+      summary: Saved summary (same as /data/summary)
+      operationId: getSummary
+      responses:
+        "200":
+          description: The saved `summary` dataset.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Summary" }
+        "404":
+          description: Not saved yet.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /refresh:
+    post:
+      tags: [control]
+      summary: Re-fetch and save every dataset now
+      description: |
+        Calls Empower for all 12 datasets, one after another, with their default date ranges, and
+        saves each one that succeeds. It can take up to a minute. The result lists each job's
+        outcome; a failure in one doesn't stop the others.
+      operationId: refreshAll
+      responses:
+        "200":
+          description: Status of each dataset job after the refresh (check `lastRunOk` on each).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/JobStatus" }
+
+  /status:
+    get:
+      tags: [control]
+      summary: Health of every job, including the session heartbeat
+      description: |
+        Jobs are the 12 datasets plus `querySession`, the session heartbeat that runs every 60 s.
+        If `querySession.lastRunOk` is false, the Empower session has ended and the user must log in
+        again.
+      operationId: getStatus
+      responses:
+        "200":
+          description: One entry per job.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/JobStatus" }
+
+  /jobs/{name}/run:
+    post:
+      tags: [control]
+      summary: Run one job now
+      description: Fetches and saves one dataset (or runs the `querySession` heartbeat) immediately, with default dates.
+      operationId: runJob
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            oneOf:
+              - $ref: "#/components/schemas/DatasetName"
+              - type: string
+                const: querySession
+      responses:
+        "200":
+          description: The job's status after running (check `lastRunOk`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JobStatus" }
+        "404":
+          description: Unknown job.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+components:
+  schemas:
+    # ---------- Service ----------
+    DatasetName:
+      type: string
+      enum: [summary, accounts, netWorthHistory, transactions, investments, performance,
+             spending, retirementCashFlow, emergencySavings, debtPayment, categories, tags]
+      description: |
+        | name | Contents | Default date range |
+        |---|---|---|
+        | summary | Net worth totals and an overview of each account | - |
+        | accounts | Full detail for every account, with totals by category | - |
+        | netWorthHistory | Daily net worth and per-account balances | last 1 year |
+        | transactions | Transactions for all accounts, with cash-flow totals | month to date |
+        | investments | Portfolio, quotes and daily history vs. benchmarks | last 90 days |
+        | performance | Investment-account performance vs. benchmarks | last 90 days |
+        | spending | Spending vs. target by week, month and year | - |
+        | retirementCashFlow | Retirement savings: current vs. target | - |
+        | emergencySavings | Emergency fund status, history and planner inputs | - |
+        | debtPayment | Debt payment history and planner inputs | - |
+        | categories | Transaction categories (to decode transactions) | - |
+        | tags | Transaction tags | - |
+
+    DatasetInfo:
+      type: object
+      properties:
+        name: { $ref: "#/components/schemas/DatasetName" }
+        endpoint: { type: string, example: /data/transactions }
+        savedAt:
+          type: [string, "null"]
+          format: date-time
+          description: When the file was last saved (local time with offset). Null if it hasn't been saved yet.
+        bytes: { type: [integer, "null"] }
+        lastRunOk: { type: [boolean, "null"], description: "Result of the last scheduled or manual run. Null if it hasn't run yet." }
+        lastError: { type: [string, "null"] }
+        acceptsDateRange: { type: boolean }
+        defaultRange:
+          type: [object, "null"]
+          properties:
+            startDate: { type: string, format: date }
+            endDate: { type: string, format: date }
+
+    JobStatus:
+      type: object
+      properties:
+        name: { type: string, description: "Dataset name or `querySession`." }
+        url: { type: [string, "null"], description: "Empower URL called (no query)." }
+        intervalSeconds: { type: integer }
+        outputFile: { type: [string, "null"], description: "Path of the saved file. Null for querySession." }
+        lastRun: { type: [string, "null"], format: date-time }
+        lastSuccess: { type: [string, "null"], format: date-time }
+        lastHttpStatus: { type: [integer, "null"] }
+        lastRunOk: { type: [boolean, "null"] }
+        lastAuthLevel:
+          type: [string, "null"]
+          description: "`SESSION_AUTHENTICATED` while logged in. Null when the response doesn't report it (e.g. summary)."
+        lastDateRange: { type: [string, "null"], example: "2026-11-01..2026-11-25" }
+        lastError: { type: [string, "null"] }
+        consecutiveFailures: { type: integer }
+        nextRun: { type: [string, "null"], format: date-time }
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+
+    UpstreamError:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string, example: "HTTP 400 Bad Request. Empty response body - session likely expired; paste a fresh curl into summary_CURL.txt" }
+        httpStatus: { type: [integer, "null"], description: "HTTP status Empower returned, if any." }
+
+    AllDatasets:
+      type: object
+      properties:
+        summary: { oneOf: [{ $ref: "#/components/schemas/Summary" }, { type: "null" }] }
+        accounts: { oneOf: [{ $ref: "#/components/schemas/Accounts" }, { type: "null" }] }
+        netWorthHistory: { oneOf: [{ $ref: "#/components/schemas/NetWorthHistory" }, { type: "null" }] }
+        transactions: { oneOf: [{ $ref: "#/components/schemas/Transactions" }, { type: "null" }] }
+        investments: { oneOf: [{ $ref: "#/components/schemas/Investments" }, { type: "null" }] }
+        performance: { oneOf: [{ $ref: "#/components/schemas/Performance" }, { type: "null" }] }
+        spending: { oneOf: [{ $ref: "#/components/schemas/Spending" }, { type: "null" }] }
+        retirementCashFlow: { oneOf: [{ $ref: "#/components/schemas/RetirementCashFlow" }, { type: "null" }] }
+        emergencySavings: { oneOf: [{ $ref: "#/components/schemas/EmergencySavings" }, { type: "null" }] }
+        debtPayment: { oneOf: [{ $ref: "#/components/schemas/DebtPayment" }, { type: "null" }] }
+        categories: { oneOf: [{ $ref: "#/components/schemas/Categories" }, { type: "null" }] }
+        tags: { oneOf: [{ $ref: "#/components/schemas/Tags" }, { type: "null" }] }
+
+    AnyDataset:
+      description: The schema depends on the dataset name in the path.
+      oneOf:
+        - $ref: "#/components/schemas/Summary"
+        - $ref: "#/components/schemas/Accounts"
+        - $ref: "#/components/schemas/NetWorthHistory"
+        - $ref: "#/components/schemas/Transactions"
+        - $ref: "#/components/schemas/Investments"
+        - $ref: "#/components/schemas/Performance"
+        - $ref: "#/components/schemas/Spending"
+        - $ref: "#/components/schemas/RetirementCashFlow"
+        - $ref: "#/components/schemas/EmergencySavings"
+        - $ref: "#/components/schemas/DebtPayment"
+        - $ref: "#/components/schemas/Categories"
+        - $ref: "#/components/schemas/Tags"
+
+    # ---------- Empower envelope ----------
+    SpHeader:
+      type: object
+      description: Empower response header. Only the fields useful to a consumer are listed.
+      properties:
+        success: { type: boolean }
+        authLevel: { type: string, example: SESSION_AUTHENTICATED }
+        errors:
+          type: array
+          items: { type: object, properties: { code: { type: integer }, message: { type: string } } }
+        SP_HEADER_VERSION: { type: integer }
+
+    # ---------- Shared pieces ----------
+    AccountGroup:
+      type: [string, "null"]
+      description: Account category. Seen so far are BANK, CREDIT_CARD, INVESTMENT, RETIREMENT, ESOP and ESPP; others may appear, and it can be null.
+      examples: [BANK, CREDIT_CARD, INVESTMENT, RETIREMENT, ESOP, ESPP]
+
+    Account:
+      type: object
+      description: "One account. summary's account lists carry a smaller set of fields than accounts (e.g. no isAsset or currency); fields may be null or absent."
+      properties:
+        userAccountId: { type: integer, description: "Account key used across all datasets." }
+        accountId: { type: string }
+        name: { type: string }
+        originalName: { type: string }
+        firmName: { type: string, description: "Institution." }
+        accountTypeGroup: { $ref: "#/components/schemas/AccountGroup" }
+        productType: { type: string }
+        balance: { type: number }
+        isAsset: { type: boolean, description: "False for liabilities such as credit cards and loans." }
+        creditLimit: { type: [number, "null"] }
+        currency: { type: string }
+        accountHolder: { type: string }
+        lastRefreshed: { type: integer, description: "Epoch ms. When Empower last synced the account." }
+        closedDate: { type: [string, "null"] }
+
+    AccountSummary:
+      type: object
+      description: Per-account change over the requested date range.
+      properties:
+        userAccountId: { type: integer }
+        accountName: { type: string }
+        siteName: { type: string }
+        currentBalance: { type: number }
+        balanceAsOfEndDate: { type: number }
+        dateRangeBalanceValueChange: { type: number }
+        dateRangeBalancePercentageChange: { type: number }
+        dateRangePerformanceValueChange: { type: number }
+        oneDayBalanceValueChange: { type: number }
+        oneDayBalancePercentageChange: { type: number }
+        oneDayPerformanceValueChange: { type: number }
+        income: { type: number }
+        expense: { type: number }
+        cashFlow: { type: number }
+        percentOfTotal: { type: number }
+        closedDate: { type: [string, "null"] }
+
+    Transaction:
+      type: object
+      properties:
+        userTransactionId: { type: integer }
+        userAccountId: { type: integer }
+        accountId: { type: string }
+        accountName: { type: string }
+        transactionDate: { type: string, format: date }
+        amount: { type: number, description: "Always positive. Use isCredit for the direction." }
+        originalAmount: { type: number }
+        isCredit: { type: boolean, description: "True = money into the account." }
+        isCashIn: { type: boolean }
+        isCashOut: { type: boolean }
+        isIncome: { type: boolean }
+        isSpending: { type: boolean }
+        isInterest: { type: boolean }
+        isDuplicate: { type: boolean }
+        description: { type: string }
+        originalDescription: { type: string }
+        categoryId: { type: integer, description: "Joins to categories[].transactionCategoryId." }
+        categoryName: { type: string }
+        categoryType: { type: string, examples: [EXPENSE, INCOME, TRANSFER, DEFERRED_COMPENSATION] }
+        transactionType: { type: string }
+        status: { type: string, examples: [posted, pending] }
+        merchantId: { type: string }
+        price: { type: number, description: "Investment transactions." }
+        quantity: { type: number, description: "Investment transactions." }
+        investmentType: { type: string }
+        currency: { type: string }
+
+    # ---------- Datasets ----------
+    Summary:
+      type: object
+      description: "`summary`: not wrapped in spHeader/spData."
+      properties:
+        totalNetWorth: { type: number }
+        totalAsset: { type: number }
+        totalLiability: { type: number }
+        assetPercentage: { type: number }
+        liabilityPercentage: { type: number }
+        bankAmount: { type: number }
+        investmentAmount: { type: number }
+        creditCardAmount: { type: number }
+        loanAmount: { type: number }
+        bankAssetPercentage: { type: number }
+        investmentAssetPercentage: { type: number }
+        creditCardLiabilityPercentage: { type: number }
+        loanLiabilityPercentage: { type: number }
+        empowerAccounts: { type: array, items: { $ref: "#/components/schemas/Account" }, description: "Accounts held at Empower itself." }
+        aggregatedAccounts: { type: array, items: { $ref: "#/components/schemas/Account" }, description: "Linked outside accounts." }
+        notifications: { type: array, items: {} }
+        isDelegate: { type: boolean }
+
+    Accounts:
+      type: object
+      description: "`accounts`: every account with full detail."
+      properties:
+        spHeader: { $ref: "#/components/schemas/SpHeader" }
+        spData:
+          type: object
+          properties:
+            networth: { type: number }
+            assets: { type: number }
+            liabilities: { type: number }
+            cashAccountsTotal: { type: number }
+            investmentAccountsTotal: { type: number }
+            creditCardAccountsTotal: { type: number }
+            loanAccountsTotal: { type: number }
+            mortgageAccountsTotal: { type: number }
+            otherAssetAccountsTotal: { type: number }
+            otherLiabilitiesAccountsTotal: { type: number }
+            accounts: { type: array, items: { $ref: "#/components/schemas/Account" } }
+
+    NetWorthHistory:
+      type: object
+      description: "`netWorthHistory`: daily values over the date range (default: last year)."
+      properties:
+        spHeader: { $ref: "#/components/schemas/SpHeader" }
+        spData:
+          type: object
+          properties:
+            intervalType: { type: string, example: DAY }
+            networthSummary:
+              type: object
+              description: Change over the range, overall and by category (dateRangeChange, dateRangePercentageChange, dateRangeCashChange, dateRangeInvestmentChange, dateRangeCreditChange, ...).
+              additionalProperties: { type: number }
+            networthHistories:
+              type: array
+              items:
+                type: object
+                properties:
+                  date: { type: string, format: date }
+                  networth: { type: number }
+                  oneDayNetworthChange: { type: number }
+                  oneDayNetworthPercentageChange: { type: number }
+            histories:
+              type: array
+              description: Daily balance of every account.
+              items:
+                type: object
+                properties:
+                  date: { type: string, format: date }
+                  aggregateBalance: { type: number }
+                  balances:
+                    type: object
+                    description: 'Keys are userAccountIds as strings, e.g. `{"1527851088": 1234.56, "aggregateAnnotation": "..."}`. Ignore keys ending in "Annotation".'
+                    additionalProperties: { type: [number, string] }
+            accountSummaries: { type: array, items: { $ref: "#/components/schemas/AccountSummary" } }
+
+    Transactions:
+      type: object
+      description: "`transactions`: all accounts over the date range (default: month to date)."
+      properties:
+        spHeader: { $ref: "#/components/schemas/SpHeader" }
+        spData:
+          type: object
+          properties:
+            startDate: { type: string, format: date }
+            endDate: { type: string, format: date }
+            intervalType: { type: string }
+            moneyIn: { type: number }
+            moneyOut: { type: number }
+            netCashflow: { type: number }
+            averageIn: { type: number }
+            averageOut: { type: number }
+            transactions: { type: array, items: { $ref: "#/components/schemas/Transaction" } }
+
+    Investments:
+      type: object
+      description: "`investments`: portfolio and quotes (default range: last 90 days)."
+      properties:
+        spHeader: { $ref: "#/components/schemas/SpHeader" }
+        spData:
+          type: object
+          properties:
+            latestPortfolio:
+              type: object
+              properties:
+                last: { type: number }
+                change: { type: number }
+                percentChange: { type: number }
+            latestQuotes:
+              type: array
+              items:
+                type: object
+                properties:
+                  ticker: { type: string }
+                  longName: { type: string }
+                  date: { type: string }
+                  last: { type: number }
+                  change: { type: number }
+                  percentChange: { type: number }
+                  open: { type: number }
+                  high: { type: number }
+                  low: { type: number }
+                  close: { type: number }
+                  previousClose: { type: number }
+            histories:
+              type: array
+              description: "Daily index series: `YOU` is the user's portfolio; `^INX` (S&P 500) and `^PC_*` are benchmarks. Values are as Empower returns them."
+              items:
+                type: object
+                properties:
+                  date: { type: string, format: date }
+                  YOU: { type: number }
+                additionalProperties: { type: number }
+            percentOfPortfolioUsedForYOU: { type: integer }
+
+    Performance:
+      type: object
+      description: "`performance`: investment, retirement, ESOP and ESPP accounts (default range: last 90 days)."
+      properties:
+        spHeader: { $ref: "#/components/schemas/SpHeader" }
+        spData:
+          type: object
+          properties:
+            performanceHistory:
+              type: array
+              description: 'Daily rows: `date`, `aggregatePerformance`, plus one property per account named by its userAccountId (e.g. `"1527851081": 0.0123`) and a matching `"<id>Annotation"` string.'
+              items:
+                type: object
+                properties:
+                  date: { type: string, format: date }
+                  aggregatePerformance: { type: number }
+                additionalProperties: { type: [number, string] }
+            benchmarkPerformanceHistory:
+              type: array
+              description: "Daily benchmark rows: `date` plus `^PC_US_STOCKS`, `^PC_INTL_STOCKS`, `^PC_US_BONDS`, `^PC_INTL_BONDS`, `^PC_ALTERNATIVES`, `^PC_BLENDED`."
+              items:
+                type: object
+                properties:
+                  date: { type: string, format: date }
+                additionalProperties: { type: number }
+            accountSummaries: { type: array, items: { $ref: "#/components/schemas/AccountSummary" } }
+
+    Spending:
+      type: object
+      description: "`spending`: spending vs. target."
+      properties:
+        spHeader: { $ref: "#/components/schemas/SpHeader" }
+        spData:
+          type: object
+          properties:
+            intervals:
+              type: array
+              items:
+                type: object
+                properties:
+                  type: { type: string, examples: [WEEK, MONTH, YEAR] }
+                  current: { type: number, description: "Spent so far this period." }
+                  average: { type: number }
+                  target: { type: number }
+
+    RetirementCashFlow:
+      type: object
+      description: "`retirementCashFlow`: annual retirement savings vs. target."
+      properties:
+        spHeader: { $ref: "#/components/schemas/SpHeader" }
+        spData:
+          type: object
+          properties:
+            current: { type: number }
+            target: { type: number }
+            annualSavingsNeededFrom: { type: number }
+            annualSavingsNeededTo: { type: number }
+            isRetired: { type: boolean }
+
+    PlannerProfile:
+      type: object
+      description: "Financial-planner inputs (`whatIf`): age, retirement age, income, spending, savings, risk tolerance, spouse details, etc. Contains personal data."
+      properties:
+        age: { type: integer }
+        retirementAge: { type: integer }
+        annualIncome: { type: number }
+        annualSpending: { type: number }
+        annualSavings: { type: number }
+        annualRetirementSpending: { type: number }
+        investibleAsset: { type: number }
+        riskTolerance: { type: string }
+        maritalStatus: { type: string }
+
+    EmergencySavings:
+      type: object
+      description: "`emergencySavings`: emergency fund status and history."
+      properties:
+        spHeader: { $ref: "#/components/schemas/SpHeader" }
+        spData:
+          type: object
+          properties:
+            result:
+              type: object
+              properties:
+                emergencyFundCurrent: { type: number }
+                emergencyFundTargetFrom: { type: number }
+                emergencyFundTargetTo: { type: number }
+                emergencyFundDifference: { type: number }
+                emergencyFundInBankAccounts: { type: number }
+                emergencyFundInTaxableAccounts: { type: number }
+                annualTargetSpending: { type: number }
+                emergencyFundShape: { type: string }
+                cashInBankAccountsHistories: { type: array, items: { type: object } }
+                headline: { type: object }
+                titles: { type: array, items: { type: string } }
+                takeaways: { type: array, items: { type: string } }
+                summaries: { type: array, items: { type: string } }
+            whatIf: { $ref: "#/components/schemas/PlannerProfile" }
+
+    DebtPayment:
+      type: object
+      description: "`debtPayment`: debt payment history."
+      properties:
+        spHeader: { $ref: "#/components/schemas/SpHeader" }
+        spData:
+          type: object
+          properties:
+            result:
+              type: object
+              properties:
+                ytdCashFlowDebt: { type: number, description: "Year-to-date cash flow to debt." }
+                debtHistoriesArray: { type: array, items: { type: object } }
+                headline: { type: object }
+                titles: { type: array, items: { type: string } }
+                takeaways: { type: array, items: { type: string } }
+                summaries: { type: array, items: { type: string } }
+            whatIf: { $ref: "#/components/schemas/PlannerProfile" }
+
+    Categories:
+      type: object
+      description: "`categories`: lookup table for transactions[].categoryId."
+      properties:
+        spHeader: { $ref: "#/components/schemas/SpHeader" }
+        spData:
+          type: array
+          items:
+            type: object
+            properties:
+              transactionCategoryId: { type: integer }
+              name: { type: string }
+              shortDescription: { type: string }
+              type: { type: string, examples: [EXPENSE, INCOME, TRANSFER, UNCATEGORIZED] }
+              isCustom: { type: boolean }
+              isEditable: { type: boolean }
+              isOverride: { type: boolean }
+
+    Tags:
+      type: object
+      description: "`tags`: the user's transaction tags."
+      properties:
+        spHeader: { $ref: "#/components/schemas/SpHeader" }
+        spData:
+          type: array
+          items:
+            type: object
+            properties:
+              tagId: { type: integer }
+              tagName: { type: string }
