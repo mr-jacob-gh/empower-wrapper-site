@@ -5,12 +5,14 @@ import { defineConfig } from "vite";
 export default defineConfig({
   base: "./",
   server: {
-    // In `npm run dev`, calls to /api/* are proxied to the local service, so
-    // development works even before the service sends CORS headers.
+    // In dev, /api/* is proxied to the service, so no CORS setup is needed for
+    // localhost:5173. The service has a Let's Encrypt certificate, which Node
+    // trusts by default. Override with EMPOWER_DEV_TARGET if it moves.
     proxy: {
       "/api": {
-        target: "http://localhost:5055",
+        target: process.env.EMPOWER_DEV_TARGET ?? "https://beefjerky67.asuscomm.com:44300",
         changeOrigin: true,
+        secure: true,
         rewrite: (path) => path.replace(/^\/api/, ""),
       },
     },

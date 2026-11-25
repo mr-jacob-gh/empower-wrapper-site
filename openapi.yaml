@@ -1,10 +1,28 @@
 openapi: 3.1.0
 info:
   title: Empower Local Service API
-  version: 1.0.0
+  version: 1.2.0
   description: |
     Read-only access to one person's Empower (Personal Dashboard) financial data, collected by a
     Windows service running on their own PC.
+
+    ## Connecting
+    - **HTTPS only.** From the internet: `https://beefjerky67.asuscomm.com:44300`. On the user's
+      PC: `https://localhost:1234`; on their home network: `https://<PC address>:1234`. (The
+      router maps the outside port 44300 to the service's port 1234.)
+    - **API key on every request**: `X-API-Key: <key>` (or `Authorization: Bearer <key>`). Missing
+      or wrong key → `401 {"error": ...}`. The user issues keys; never log or display them.
+      Requests from the user's PC itself may be allowed without a key, but always send it.
+    - **Certificate**: `beefjerky67.asuscomm.com` is served with a publicly trusted Let's Encrypt
+      certificate once the owner has installed it (`GET /` → `certificates.trusted` is non-null), so
+      normal verification works. `localhost` and LAN addresses use a self-signed certificate: trust
+      the copy the user gives you (`https-cert.cer`, DER; convert for curl with
+      `openssl x509 -inform DER -in https-cert.cer -out https-cert.pem`) or pin its SHA-256
+      fingerprint. Do **not** disable certificate verification: that would expose the API key.
+    - **Browser apps (CORS)**: only listed origins may call from a web page (currently
+      `https://mr-jacob-gh.github.io`). Preflight `OPTIONS` requests need no key; every response,
+      including 401, carries `Access-Control-Allow-Origin` for allowed origins; `X-Data-Source` and
+      `X-Date-Range` are exposed to the page.
 
     ## How it works
     - The service calls Empower every 15 minutes and saves each **dataset** as a JSON file.
@@ -44,10 +62,16 @@ info:
     ## Privacy
     This is personal financial and identity data (`emergencySavings.whatIf` and
     `debtPayment.whatIf` include names, birthdays and income). Only use it for what the user asked.
-    There is no authentication, because the API listens on localhost only.
+    Access requires the user's API key (see Connecting).
 servers:
-  - url: http://localhost:5055
-    description: The service on the user's PC (localhost only)
+  - url: https://beefjerky67.asuscomm.com:44300
+    description: From the internet (the router forwards port 44300 to the service).
+  - url: https://localhost:1234
+    description: On the user's PC itself.
+
+security:
+  - ApiKey: []
+  - Bearer: []
 
 tags:
   - name: data
@@ -62,8 +86,9 @@ paths:
       summary: Service info
       operationId: getServiceInfo
       responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "200":
-          description: Service name, endpoint list and dataset names.
+          description: Service name, endpoint list, dataset names and HTTPS certificates.
           content:
             application/json:
               schema:
@@ -72,6 +97,13 @@ paths:
                   service: { type: string, example: EmpowerLocalService }
                   endpoints: { type: array, items: { type: string } }
                   datasets: { type: array, items: { $ref: "#/components/schemas/DatasetName" } }
+                  certificates:
+                    type: object
+                    properties:
+                      trusted:
+                        description: "The Let's Encrypt certificate for the public hostname, or null if not installed (then every client gets the self-signed one)."
+                        oneOf: [{ $ref: "#/components/schemas/CertificateInfo" }, { type: "null" }]
+                      selfSigned: { $ref: "#/components/schemas/CertificateInfo" }
 
   /data:
     get:
@@ -80,6 +112,7 @@ paths:
       description: Start here. Shows when each dataset was last saved and whether its last refresh worked.
       operationId: listDatasets
       responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "200":
           description: One entry per dataset, in refresh order.
           content:
@@ -98,6 +131,7 @@ paths:
         `/data/{name}` when you only need some of it.
       operationId: getAllDatasets
       responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "200":
           description: Every dataset keyed by name; `null` for one that hasn't been saved yet.
           content:
@@ -133,6 +167,7 @@ paths:
           description: Last day (inclusive), `yyyy-MM-dd`. Date-based datasets only.
           schema: { type: string, format: date, example: "2026-03-31" }
       responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "200":
           description: The dataset.
           headers:
@@ -170,6 +205,7 @@ paths:
       summary: Saved summary (same as /data/summary)
       operationId: getSummary
       responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "200":
           description: The saved `summary` dataset.
           content:
@@ -191,6 +227,7 @@ paths:
         outcome; a failure in one doesn't stop the others.
       operationId: refreshAll
       responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "200":
           description: Status of each dataset job after the refresh (check `lastRunOk` on each).
           content:
@@ -209,6 +246,7 @@ paths:
         again.
       operationId: getStatus
       responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "200":
           description: One entry per job.
           content:
@@ -233,6 +271,7 @@ paths:
               - type: string
                 const: querySession
       responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "200":
           description: The job's status after running (check `lastRunOk`).
           content:
@@ -245,6 +284,27 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
 
 components:
+  securitySchemes:
+    ApiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: An API key issued by the user (from the service's `data/api-keys.txt`).
+    Bearer:
+      type: http
+      scheme: bearer
+      description: "The same API key, sent as `Authorization: Bearer <key>`."
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid API key.
+      headers:
+        WWW-Authenticate:
+          schema: { type: string, example: Bearer }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
   schemas:
     # ---------- Service ----------
     DatasetName:
@@ -304,6 +364,17 @@ components:
         lastError: { type: [string, "null"] }
         consecutiveFailures: { type: integer }
         nextRun: { type: [string, "null"], format: date-time }
+
+    CertificateInfo:
+      type: object
+      properties:
+        source: { type: string, enum: [trusted, self-signed] }
+        subject: { type: string }
+        issuer: { type: string }
+        notAfter: { type: string, format: date-time }
+        daysLeft: { type: integer, description: "Days until it expires." }
+        names: { type: array, items: { type: string }, description: "DNS names it covers." }
+        sha256: { type: string, description: "SHA-256 fingerprint (hex), for pinning." }
 
     Error:
       type: object

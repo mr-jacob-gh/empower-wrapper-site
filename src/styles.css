@@ -121,6 +121,21 @@ ul { margin: 0; padding: 0; list-style: none; }
 .nav__item:hover { color: var(--text); }
 .nav__item.is-active { color: var(--accent); box-shadow: var(--pressed); }
 .sidebar__foot { margin-top: auto; display: grid; gap: 4px; word-break: break-all; }
+.link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-self: start;
+  margin-top: 10px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+.link-btn:hover { color: var(--accent); }
+.link-btn svg { width: 15px; height: 15px; }
 
 .topbar { display: none; }
 
@@ -401,7 +416,42 @@ ul { margin: 0; padding: 0; list-style: none; }
 .error__icon svg { width: 26px; height: 26px; }
 .error h2 { font-size: 20px; margin-bottom: 10px; }
 .error__body { color: var(--muted); text-align: left; margin-bottom: 24px; }
-.error__body ul { list-style: disc; padding-left: 20px; display: grid; gap: 6px; }
+.error__body ul { list-style: disc; padding-left: 20px; display: grid; gap: 8px; }
+.error__body a { color: var(--accent); }
+.error__body strong { color: var(--text); font-weight: 600; }
+
+/* ---------- API key prompt ---------- */
+.connect { max-width: 480px; margin: 40px auto; padding: 36px 32px; text-align: center; }
+.connect h2 { font-size: 20px; margin-bottom: 8px; }
+.connect > p { margin: 0 0 20px; }
+.connect__form { display: grid; gap: 16px; text-align: left; }
+.connect__form .btn { justify-self: stretch; justify-content: center; }
+.field { display: grid; gap: 8px; font-size: 13px; color: var(--muted); font-weight: 600; }
+.field input {
+  height: 46px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--pressed);
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  letter-spacing: 1px;
+}
+.field input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.check { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13.5px; cursor: pointer; }
+.check input { width: 17px; height: 17px; accent-color: var(--accent-2); }
+.form-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 0 0 18px;
+  color: var(--warn);
+  font-size: 13.5px;
+}
+.form-error svg { width: 16px; height: 16px; flex: none; }
 
 /* ============================================================
    Responsive
@@ -425,6 +475,8 @@ ul { margin: 0; padding: 0; list-style: none; }
     padding-top: max(14px, env(safe-area-inset-top));
     background: var(--bg);
   }
+  .topbar__actions { display: flex; gap: 12px; }
+  .connect { margin: 16px auto; padding: 28px 20px; }
   .main { padding: 8px 18px 40px; }
   .page-head { margin-bottom: 20px; }
   .page-head h1 { font-size: 22px; }

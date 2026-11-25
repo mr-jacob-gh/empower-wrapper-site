@@ -13,5 +13,7 @@ export const icons = {
   wallet: svg(`<rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 9.5h14M16 13.5h2"/>`),
   refresh: svg(`<path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v5h-5"/>`),
   alert: svg(`<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17.2v.1"/>`),
+  key: svg(`<circle cx="8" cy="15" r="4.5"/><path d="M11.2 11.8L20 3M16.5 6.5l3 3M14 9l2 2"/>`),
+  logout: svg(`<path d="M9 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h3"/><path d="M15 16l4-4-4-4M19 12H9"/>`),
   plug: svg(`<path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0z"/><path d="M12 17v4"/>`),
 };

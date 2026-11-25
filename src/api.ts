@@ -1,15 +1,17 @@
 import type { ApiErrorBody, Summary } from "./types";
+import { getApiKey } from "./auth";
 
 /**
- * Where the local service lives.
- * - `npm run dev`: "/api", proxied by Vite to http://localhost:5055.
- * - Production build: http://localhost:5055 (override with VITE_API_BASE).
+ * Where the service lives.
+ * - `npm run dev`: "/api", proxied by Vite to the service on this PC (see vite.config.ts).
+ * - Production build: the public address (override with VITE_API_BASE).
  */
 export const API_BASE: string = (
-  import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? "/api" : "http://localhost:5055")
+  import.meta.env.VITE_API_BASE ??
+  (import.meta.env.DEV ? "/api" : "https://beefjerky67.asuscomm.com:44300")
 ).replace(/\/$/, "");
 
-export type ApiErrorKind = "network" | "not-found" | "http";
+export type ApiErrorKind = "no-key" | "unauthorized" | "network" | "not-found" | "http";
 
 export class ApiError extends Error {
   constructor(
@@ -29,9 +31,15 @@ export interface Fetched<T> {
 }
 
 async function getJson<T>(path: string, signal?: AbortSignal): Promise<Fetched<T>> {
+  const key = getApiKey();
+  if (!key) throw new ApiError("No API key entered.", "no-key");
+
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}${path}`, { signal, headers: { Accept: "application/json" } });
+    res = await fetch(`${API_BASE}${path}`, {
+      signal,
+      headers: { Accept: "application/json", "X-API-Key": key },
+    });
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") throw err;
     throw new ApiError(`Couldn't reach the service at ${API_BASE}.`, "network");
@@ -45,7 +53,9 @@ async function getJson<T>(path: string, signal?: AbortSignal): Promise<Fetched<T
     } catch {
       /* body wasn't JSON */
     }
-    throw new ApiError(message, res.status === 404 ? "not-found" : "http", res.status);
+    const kind: ApiErrorKind =
+      res.status === 401 ? "unauthorized" : res.status === 404 ? "not-found" : "http";
+    throw new ApiError(message, kind, res.status);
   }
 
   const lastModified = res.headers.get("Last-Modified");

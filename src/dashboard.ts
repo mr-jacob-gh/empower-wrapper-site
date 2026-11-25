@@ -237,6 +237,25 @@ export function loadingHtml(): string {
   </div>`;
 }
 
+/** Prompt for the API key. Optional `problem` explains why it's being asked again. */
+export function keyFormHtml(problem?: string): string {
+  return `
+  <section class="card connect">
+    <div class="error__icon">${icons.key}</div>
+    <h2>Connect to your service</h2>
+    <p class="muted">Enter an API key from the service's <code>data/api-keys.txt</code>. It's kept only in this browser and sent only to your service.</p>
+    ${problem ? `<p class="form-error" role="alert">${icons.alert}<span>${esc(problem)}</span></p>` : ""}
+    <form class="connect__form" data-form="api-key">
+      <label class="field">
+        <span>API key</span>
+        <input type="password" name="apiKey" required autocomplete="off" autocapitalize="off" spellcheck="false" />
+      </label>
+      <label class="check"><input type="checkbox" name="remember" checked /> <span>Remember on this device</span></label>
+      <button class="btn btn--accent" type="submit">${icons.key}<span>Connect</span></button>
+    </form>
+  </section>`;
+}
+
 export function errorHtml(title: string, body: string): string {
   return `
   <section class="card error" role="alert">
