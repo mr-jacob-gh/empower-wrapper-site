@@ -122,6 +122,37 @@ for 5 minutes and never stored anywhere else:
     (`#/account/<id>?category=EXPENSE` or `?q=whole foods`). If the category list can't be loaded,
     searching still works but the groupings aren't offered.
 
+## Subscriptions
+
+**Subscriptions** in the sidebar (or the Dashboard / Subscriptions switch at the top on phones)
+opens `#/subscriptions`: totals (number active, ≈ per month, ≈ per year) and a unique list of active
+subscriptions, sorted by name (A–Z) or by approximate next payment (soonest first) with the
+switch above the list; the choice is kept in the URL (`#/subscriptions?sort=next`). Each shows its schedule, the account it's charged to,
+the latest amount and an estimated next charge; selecting one expands it to list its charges (one
+open at a time). It uses the saved `transactions` (last 12 months) and `categories`, already cached
+for the account screen, so it makes no Empower calls.
+
+How subscriptions are recognised (`src/subscriptions.ts`):
+1. **Candidates:** money-out, non-duplicate charges in the Expense group (or Uncategorized).
+   Transfers, card payments, income and retirement contributions drop out, and so do recurring bills
+   that aren't subscriptions: Loans, Mortgages, Rent, Taxes, ATM/Cash, Checks, Wages Paid.
+2. **Grouped by merchant across all accounts** (`merchantId`, or a cleaned-up description), so a
+   subscription moved to another card stays one subscription.
+3. **A regular schedule:** the typical gap picks weekly, every 2 weeks, monthly, every 2 / 3 / 6 months
+   or yearly; at least 80% of gaps must fit it (one missed charge allowed); and there must be enough
+   charges (4 weekly, 3 for every-2-weeks to every-2-months, 2 for quarterly and longer, which must
+   then be the same amount; a new monthly one with 2 identical charges also counts).
+4. **A steady price:** at most two changes of more than 3%, none over 35%, so price rises are
+   followed (and shown) but variable spending like groceries or fuel isn't mistaken for a
+   subscription.
+5. **Several plans at one merchant:** if a merchant's charges don't fit as a whole, they're split by
+   amount and each part is tested (e.g. two Apple plans).
+6. **Active:** the last charge is no more than half a cycle overdue (at least 7 days' grace), measured
+   from the transactions file's end date. Ended subscriptions aren't listed.
+
+"Per month" converts each subscription's latest price to a monthly equivalent. Because the data
+covers 12 months, a yearly subscription is only found if both renewals fall inside that window.
+
 ## Structure
 
 ```
@@ -136,8 +167,9 @@ src/
   cache.ts      In-memory, per-tab cache for saved datasets
   categories.ts Transaction category grouping (Income/Expenses/Transfers/Uncategorized) and filtering
   filterbox.ts  The transactions filter box: grouping list + free-text search (ARIA combobox)
+  subscriptions.ts Recurring-charge detection and the Subscriptions screen
   trends.ts     24h / 90-day investment trends from the saved performance file, in-memory cache
-  main.ts       App shell, key prompt flow, refresh + 5-minute polling, routing + screen transitions
+  main.ts       App shell, nav, key prompt flow, refresh + 5-minute polling, routing + screen transitions
   config.ts     Personal settings (emergency fund account and monthly expenses)
   format.ts     Currency, percent and relative-time formatting
   icons.ts      Inline SVG icons

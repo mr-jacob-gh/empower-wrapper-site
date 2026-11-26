@@ -104,6 +104,8 @@ export interface NetWorthHistory {
 export interface Transaction {
   userTransactionId?: number;
   userAccountId?: number;
+  accountName?: string;
+  merchantId?: string;
   transactionDate?: string;
   /** Always positive; `isCredit` gives the direction. */
   amount?: number;

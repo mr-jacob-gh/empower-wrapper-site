@@ -23,6 +23,7 @@ import {
   type ChartRange,
 } from "./account";
 import { cached } from "./cache";
+import { detectSubscriptions, isSubSort, renderSubscriptions, subscriptionsShellHtml, type SubSort } from "./subscriptions";
 import { ALL, type Selection } from "./categories";
 import { mountFilterBox, type FilterState } from "./filterbox";
 import { dateTime, esc, timeAgo } from "./format";
@@ -43,7 +44,8 @@ root.innerHTML = `
     <aside class="sidebar">
       <div class="brand"><span class="brand__mark">${icons.logo}</span><span>Empower</span></div>
       <nav class="nav" aria-label="Main">
-        <a class="nav__item is-active" href="#" aria-current="page">${icons.dashboard}<span>Dashboard</span></a>
+        <a class="nav__item is-active" href="#" data-nav="dashboard" aria-current="page">${icons.dashboard}<span>Dashboard</span></a>
+        <a class="nav__item" href="#/subscriptions" data-nav="subscriptions">${icons.repeat}<span>Subscriptions</span></a>
       </nav>
       <div class="sidebar__foot">
         <div class="muted small">Service</div>
@@ -54,6 +56,10 @@ root.innerHTML = `
 
     <header class="topbar">
       <div class="brand"><span class="brand__mark">${icons.logo}</span><span>Empower</span></div>
+      <nav class="topnav" aria-label="Main">
+        <a class="topnav__item is-active" href="#" data-nav="dashboard" aria-current="page">Dashboard</a>
+        <a class="topnav__item" href="#/subscriptions" data-nav="subscriptions">Subscriptions</a>
+      </nav>
       <div class="topbar__actions">
         <button class="icon-btn" data-action="forget-key" aria-label="Forget API key" title="Forget API key">${icons.logout}</button>
         <button class="icon-btn" data-action="reload" aria-label="Refresh">${icons.refresh}</button>
@@ -73,6 +79,7 @@ root.innerHTML = `
           <div id="content"></div>
         </div>
         <div class="screen" data-screen="account" id="account" hidden></div>
+        <div class="screen" data-screen="subscriptions" id="subscriptions" hidden></div>
       </div>
     </main>
   </div>
@@ -81,6 +88,7 @@ root.innerHTML = `
 const stage = root.querySelector<HTMLDivElement>(".stage")!;
 const dashboardScreen = root.querySelector<HTMLDivElement>("[data-screen='dashboard']")!;
 const accountScreen = root.querySelector<HTMLDivElement>("#account")!;
+const subsScreen = root.querySelector<HTMLDivElement>("#subscriptions")!;
 const content = root.querySelector<HTMLDivElement>("#content")!;
 const freshness = root.querySelector<HTMLDivElement>("#freshness")!;
 
@@ -120,7 +128,7 @@ function showKeyForm(problem?: string): void {
   clearData();
   savedAt = null;
   renderFreshness();
-  leaveAccountNow();
+  leaveToDashboardNow();
   content.innerHTML = keyFormHtml(problem);
   content.querySelector<HTMLInputElement>("input[name='apiKey']")?.focus();
 }
@@ -166,11 +174,11 @@ async function load(showSkeleton: boolean): Promise<void> {
     if (err instanceof ApiError && err.kind === "unauthorized") {
       clearApiKey();
       clearData();
-      leaveAccountNow();
+      leaveToDashboardNow();
       content.innerHTML = keyFormHtml("The service rejected that key. Check it and try again.");
     } else {
       // Errors are shown on the dashboard screen.
-      leaveAccountNow();
+      leaveToDashboardNow();
       content.innerHTML = describeError(err);
     }
   } finally {
@@ -199,7 +207,7 @@ function loadTrends(force: boolean): void {
 
 // ---------- Account screen ----------
 
-type ScreenName = "dashboard" | "account";
+type ScreenName = "dashboard" | "account" | "subscriptions";
 let current: ScreenName = "dashboard";
 /** What the account screen shows; kept across re-renders of the same account. */
 let accountUi: {
@@ -245,9 +253,35 @@ function syncFilterToUrl(): void {
 /** The URL fragment applyRoute() last acted on. */
 let appliedHash = location.hash;
 
+// Subscriptions URL: #/subscriptions, optionally ?sort=next (default: name).
+const SUBS_ROUTE = /^#\/subscriptions\/?(?:\?(.*))?$/;
+const isSubscriptionsRoute = (): boolean => SUBS_ROUTE.test(location.hash);
+
+function routeSubSort(): SubSort {
+  const sort = new URLSearchParams(SUBS_ROUTE.exec(location.hash)?.[1] ?? "").get("sort");
+  return isSubSort(sort) ? sort : "name";
+}
+
+/** Highlight the nav item for the current page (accounts belong to the dashboard). */
+function updateNav(): void {
+  const page = isSubscriptionsRoute() ? "subscriptions" : "dashboard";
+  for (const a of root.querySelectorAll<HTMLElement>("[data-nav]")) {
+    const on = a.dataset.nav === page;
+    a.classList.toggle("is-active", on);
+    if (on) a.setAttribute("aria-current", "page");
+    else a.removeAttribute("aria-current");
+  }
+}
+
 /** Show whatever the URL asks for. */
 function applyRoute(animate: boolean): void {
   appliedHash = location.hash;
+  updateNav();
+  if (isSubscriptionsRoute()) {
+    renderSubscriptionsScreen();
+    if (current !== "subscriptions") void show("subscriptions", animate);
+    return;
+  }
   const id = routeAccountId();
   if (id !== null) {
     if (!summary) return; // load() calls this again once the summary is in
@@ -368,7 +402,11 @@ let navToken = 0;
 const running: Animation[] = [];
 const isMobile = () => matchMedia("(max-width: 760px)").matches;
 const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
-const screenEl = (name: ScreenName) => (name === "dashboard" ? dashboardScreen : accountScreen);
+const screenEl = (name: ScreenName) =>
+  name === "dashboard" ? dashboardScreen : name === "account" ? accountScreen : subsScreen;
+/** Opening an account and going back slide on phones; switching pages fades. */
+const isDrillDown = (a: ScreenName, b: ScreenName): boolean =>
+  (a === "dashboard" && b === "account") || (a === "account" && b === "dashboard");
 
 /**
  * Switch screens. On phones the current screen slides off one side while the new one
@@ -401,7 +439,7 @@ async function show(target: ScreenName, animate: boolean): Promise<void> {
 
   if (!animate || reducedMotion()) return done();
 
-  if (!isMobile()) {
+  if (!isMobile() || !isDrillDown(fromName, target)) {
     done();
     running.push(
       to.animate([{ opacity: 0, transform: "translateY(6px)" }, { opacity: 1, transform: "none" }], {
@@ -435,7 +473,9 @@ async function show(target: ScreenName, animate: boolean): Promise<void> {
 
 /** Move focus for keyboard and screen-reader users after a screen change. */
 function focusAfter(target: ScreenName): void {
-  if (target === "account") {
+  if (target === "subscriptions") {
+    subsScreen.querySelector<HTMLElement>("h1")?.focus({ preventScroll: true });
+  } else if (target === "account") {
     accountScreen.querySelector<HTMLElement>("[data-action='back']")?.focus({ preventScroll: true });
   } else {
     content.querySelector<HTMLElement>(`[data-account-id='${accountUi.id}'] .acct__open`)?.focus({ preventScroll: true });
@@ -443,9 +483,63 @@ function focusAfter(target: ScreenName): void {
 }
 
 /** Back to the dashboard without animation (errors, key prompt). */
-function leaveAccountNow(): void {
-  if (routeAccountId() !== null) history.replaceState(null, "", location.pathname + location.search);
+function leaveToDashboardNow(): void {
+  if (location.hash && location.hash !== "#") history.replaceState(null, "", location.pathname + location.search);
+  appliedHash = location.hash;
+  updateNav();
   if (current !== "dashboard") void show("dashboard", false);
+}
+
+// ---------- Subscriptions screen ----------
+
+/** The expanded subscription panel, if any (one at a time). */
+let openSub: string | null = null;
+
+function renderSubscriptionsScreen(): void {
+  document.title = `Subscriptions · ${APP_TITLE}`;
+  if (!subsScreen.querySelector(".subs-screen")) subsScreen.innerHTML = subscriptionsShellHtml();
+  void loadSubscriptions();
+}
+
+/** Detect and draw from the cached transactions (and category list, if loaded). */
+function drawSubscriptions(): void {
+  const data = transactions.peek()?.data;
+  if (!data || !isSubscriptionsRoute()) return;
+  const spData = data.spData;
+  const today = new Date();
+  const asOf =
+    spData?.endDate ??
+    `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const subs = detectSubscriptions(spData?.transactions ?? [], {
+    asOf,
+    categories: categories.peek()?.data.spData ?? null,
+    accountName: (id) => (summary && typeof id === "number" ? findAccount(summary, id)?.account.name : undefined),
+  });
+  renderSubscriptions(subsScreen, subs, { start: spData?.startDate, end: spData?.endDate }, routeSubSort());
+  showOpenSub();
+}
+
+async function loadSubscriptions(): Promise<void> {
+  // Draw straight away from memory when both lists are there; the loads refresh them if old.
+  if (transactions.peek() && categories.peek()) drawSubscriptions();
+  try {
+    await loadTransactions();
+    drawSubscriptions();
+  } catch (err) {
+    if (handleKeyError(err) || !isSubscriptionsRoute()) return;
+    const body = subsScreen.querySelector<HTMLElement>("[data-role='subs-body']");
+    if (body) body.innerHTML = `<section class="card">${errorBlock(`Couldn't load transactions: ${err instanceof Error ? err.message : String(err)}`)}</section>`;
+  }
+}
+
+function showOpenSub(): void {
+  for (const row of subsScreen.querySelectorAll<HTMLElement>(".sub[data-sub-key]")) {
+    const open = row.dataset.subKey === openSub;
+    row.classList.toggle("is-open", open);
+    row.querySelector(".sub__row")?.setAttribute("aria-expanded", String(open));
+    const details = row.querySelector<HTMLElement>(".sub__details");
+    if (details) details.hidden = !open;
+  }
 }
 
 /** History entries for accounts opened from the dashboard carry this, so Back can use history.back(). */
@@ -514,7 +608,7 @@ root.addEventListener("click", (e) => {
     e.preventDefault();
     void load(false);
     if (selected === "investments") loadTrends(true);
-    if (current === "account") {
+    if (current === "account" || current === "subscriptions") {
       balanceHistory.clear();
       transactions.clear();
     }
@@ -534,6 +628,34 @@ root.addEventListener("click", (e) => {
     drawChart();
     return;
   }
+  // Subscriptions: sort order (kept in the URL, replacing the history entry).
+  const sortBtn = el.closest<HTMLElement>("[data-sub-sort]");
+  if (sortBtn) {
+    const sort = sortBtn.dataset.subSort ?? "name";
+    history.replaceState(history.state, "", sort === "name" ? "#/subscriptions" : `#/subscriptions?sort=${sort}`);
+    appliedHash = location.hash;
+    drawSubscriptions();
+    subsScreen.querySelector<HTMLElement>(`[data-sub-sort='${sort}']`)?.focus({ preventScroll: true });
+    return;
+  }
+
+  // Subscriptions: open a panel's charges, closing any other; click an open panel to close it.
+  const subToggle = el.closest<HTMLElement>("[data-sub-toggle]");
+  if (subToggle) {
+    const key = subToggle.dataset.subToggle ?? null;
+    const row = subToggle.closest<HTMLElement>(".sub");
+    const before = row?.getBoundingClientRect().top ?? 0;
+    openSub = openSub === key ? null : key;
+    showOpenSub();
+    if (row) {
+      window.scrollBy(0, row.getBoundingClientRect().top - before);
+      if (openSub === key && row.getBoundingClientRect().bottom > window.innerHeight) {
+        row.scrollIntoView({ block: "nearest", behavior: reducedMotion() ? "auto" : "smooth" });
+      }
+    }
+    return;
+  }
+
   // Transactions: open a row's details, closing any other; click an open row to close it.
   const txnToggle = el.closest<HTMLElement>("[data-txn-toggle]");
   if (txnToggle) {
@@ -629,5 +751,8 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 
-// A deep link to an account (#/account/<id>) opens it once the summary loads.
+// A deep link to an account (#/account/<id>) opens it once the summary loads; the
+// Subscriptions page doesn't need the summary, so it opens straight away.
+updateNav();
 void load(true);
+if (isSubscriptionsRoute() && getApiKey()) applyRoute(false);

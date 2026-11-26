@@ -15,6 +15,7 @@ export const icons = {
   alert: svg(`<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17.2v.1"/>`),
   key: svg(`<circle cx="8" cy="15" r="4.5"/><path d="M11.2 11.8L20 3M16.5 6.5l3 3M14 9l2 2"/>`),
   logout: svg(`<path d="M9 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h3"/><path d="M15 16l4-4-4-4M19 12H9"/>`),
+  repeat: svg(`<path d="M17 2l3 3-3 3"/><path d="M4 11V9a4 4 0 0 1 4-4h12"/><path d="M7 22l-3-3 3-3"/><path d="M20 13v2a4 4 0 0 1-4 4H4"/>`),
   chevronDown: svg(`<path d="M6 9.5l6 6 6-6"/>`),
   search: svg(`<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/>`),
   close: svg(`<path d="M6 6l12 12"/><path d="M18 6L6 18"/>`),
