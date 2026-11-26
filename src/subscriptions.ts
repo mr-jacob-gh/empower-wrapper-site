@@ -4,7 +4,7 @@
 // 1. Candidates are money-out, non-duplicate charges whose category is in the Expense
 //    group (or Uncategorized). Transfers, card payments, income and retirement
 //    contributions drop out, and so do recurring bills that aren't subscriptions
-//    (loans, mortgages, rent, taxes, ATM/cash, checks).
+//    (loans, mortgages, rent, taxes, ATM/cash, checks, service charges/fees, advisory fees).
 // 2. Charges are grouped by merchant across all accounts (merchantId, or a normalised
 //    description), so moving a subscription to another card doesn't split it.
 // 3. A group is a subscription when the typical gap between charges matches a schedule
@@ -45,8 +45,18 @@ export const CADENCES: Cadence[] = [
   { key: "yearly", label: "Yearly", days: 365.25, lo: 350, hi: 380, minCount: 2, months: 12 },
 ];
 
-/** Recurring, but not subscriptions. Matched against the category list's names. */
-const EXCLUDED_CATEGORIES = new Set(["loans", "mortgages", "rent", "taxes", "atm/cash", "checks", "wages paid"]);
+/** Recurring, but not subscriptions (fees go to Interest & Fees on the Spending page). Matched against the category list's names. */
+const EXCLUDED_CATEGORIES = new Set([
+  "loans",
+  "mortgages",
+  "rent",
+  "taxes",
+  "atm/cash",
+  "checks",
+  "wages paid",
+  "service charges/fees",
+  "advisory fee",
+]);
 
 export interface Subscription {
   key: string;

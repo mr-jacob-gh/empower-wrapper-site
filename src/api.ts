@@ -1,4 +1,13 @@
-import type { ApiErrorBody, CashFlowHistory, Categories, NetWorthHistory, Performance, Summary, Transactions } from "./types";
+import type {
+  ApiErrorBody,
+  CashFlowHistory,
+  Categories,
+  MerchantCategory,
+  NetWorthHistory,
+  Performance,
+  Summary,
+  Transactions,
+} from "./types";
 import { getApiKey } from "./auth";
 
 /**
@@ -30,15 +39,26 @@ export interface Fetched<T> {
   savedAt: Date | null;
 }
 
-async function getJson<T>(path: string, signal?: AbortSignal): Promise<Fetched<T>> {
+function getJson<T>(path: string, signal?: AbortSignal): Promise<Fetched<T>> {
+  return request<T>("GET", path, undefined, signal);
+}
+
+/** Any call to the service. `body` is sent as JSON. A 204 response gives `data: null`. */
+async function request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<Fetched<T>> {
   const key = getApiKey();
   if (!key) throw new ApiError("No API key entered.", "no-key");
 
   let res: Response;
   try {
     res = await fetch(`${API_BASE}${path}`, {
+      method,
       signal,
-      headers: { Accept: "application/json", "X-API-Key": key },
+      headers: {
+        Accept: "application/json",
+        "X-API-Key": key,
+        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") throw err;
@@ -61,7 +81,7 @@ async function getJson<T>(path: string, signal?: AbortSignal): Promise<Fetched<T
   const lastModified = res.headers.get("Last-Modified");
   const savedAt = lastModified ? new Date(lastModified) : null;
   return {
-    data: (await res.json()) as T,
+    data: (res.status === 204 ? null : await res.json()) as T,
     savedAt: savedAt && !Number.isNaN(savedAt.getTime()) ? savedAt : null,
   };
 }
@@ -97,4 +117,25 @@ export function getCashFlowHistory(signal?: AbortSignal): Promise<Fetched<CashFl
 /** The saved `categories` dataset: lookup table for transactions[].categoryId. No Empower call. */
 export function getCategories(signal?: AbortSignal): Promise<Fetched<Categories>> {
   return getJson<Categories>("/data/categories", signal);
+}
+
+// ---------- Your merchant categories (the only thing the app saves on the service) ----------
+
+/** All saved merchant categories (`[]` when none). */
+export function getMerchantCategories(signal?: AbortSignal): Promise<Fetched<MerchantCategory[]>> {
+  return getJson<MerchantCategory[]>("/merchant-categories", signal);
+}
+
+/** Set one merchant's category (adds it, or changes it). Other entries are untouched. */
+export function putMerchantCategory(merchantId: string, category: string): Promise<Fetched<MerchantCategory>> {
+  return request<MerchantCategory>("PUT", `/merchant-categories/${encodeURIComponent(merchantId)}`, { category });
+}
+
+/** Remove one merchant's category. A 404 means it had none, which is fine. */
+export async function deleteMerchantCategory(merchantId: string): Promise<void> {
+  try {
+    await request<null>("DELETE", `/merchant-categories/${encodeURIComponent(merchantId)}`);
+  } catch (err) {
+    if (!(err instanceof ApiError && err.kind === "not-found")) throw err;
+  }
 }

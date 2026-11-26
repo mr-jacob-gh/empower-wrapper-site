@@ -134,15 +134,31 @@ again (or Clear) to deselect. The period and slice are kept in the URL
 Empower calls.
 
 Each spending transaction lands in one slice, checked in this order:
+0. **Your merchant categories:** expand any transaction (on the Spending list or an account screen)
+   and pick a **Spending category**. That applies to every transaction from the same merchant
+   (`transactions[].merchantId`), from then on, whatever its category; pick **Automatic** to undo.
+   It can also bring in something that otherwise isn't spending (e.g. a transfer). They're saved on
+   your service (`/merchant-categories`, one merchant per `PUT`/`DELETE`, so two devices never
+   overwrite each other) as the category's name (e.g. "Groceries/Household"), so they're the same
+   on every device. The screen updates at once; if the save fails, the change is undone and the
+   error shown. The Spending screen confirms how many transactions moved, with **Undo**, and lists
+   all your merchant categories under the chart to change or remove (a name that isn't one of the
+   six, set by another client, is listed but doesn't change the chart). Transactions without a
+   merchant ID can't be assigned. The list is re-read every 5 minutes and on Refresh. Rules saved
+   in the browser by the previous version are moved to the service once, matched to merchants
+   through your transactions.
 1. **Subscriptions:** charges belonging to a detected subscription (see below), including ones
    that have since ended, so past periods count them.
-2. **Restaurants**, **Groceries**, **Utilities** (Utilities, Cable/Satellite and Telephone): by the
-   category list's name for the transaction's `categoryId`.
+2. **Restaurants**, **Groceries/Household**, **Utilities** (Utilities, Cable/Satellite and Telephone), **Pets**
+   (Pets/Pet Care), **Interest & Fees** (Service Charges/Fees, Advisory Fee, and money out in the
+   Interest category, i.e. interest charged; interest earned isn't spending): by the category
+   list's name for the transaction's `categoryId`.
 3. **Other shopping:** every other Expense (or Uncategorized) transaction.
 
 Spending is money out in the Expense group; transfers, card payments and income aren't spending.
 Refunds (money in with an Expense category) reduce their slice. Slice colours are fixed per slice
-and were validated as a set, including the donut's wrap-around pair, on the dark card surface.
+and were validated in ring order (each against its neighbours, including the wrap-around pair) on
+the dark card surface.
 
 ## Subscriptions
 
@@ -157,7 +173,8 @@ for the account screen, so it makes no Empower calls.
 How subscriptions are recognised (`src/subscriptions.ts`):
 1. **Candidates:** money-out, non-duplicate charges in the Expense group (or Uncategorized).
    Transfers, card payments, income and retirement contributions drop out, and so do recurring bills
-   that aren't subscriptions: Loans, Mortgages, Rent, Taxes, ATM/Cash, Checks, Wages Paid.
+   that aren't subscriptions: Loans, Mortgages, Rent, Taxes, ATM/Cash, Checks, Wages Paid, Service
+   Charges/Fees, Advisory Fee.
 2. **Grouped by merchant across all accounts** (`merchantId`, or a cleaned-up description), so a
    subscription moved to another card stays one subscription.
 3. **A regular schedule:** the typical gap picks weekly, every 2 weeks, monthly, every 2 / 3 / 6 months
@@ -180,7 +197,7 @@ covers 12 months, a yearly subscription is only found if both renewals fall insi
 ```
 src/
   api.ts        API client (X-API-Key; saved summary, performance, netWorthHistory, transactions,
-                categories, cashFlowHistory)
+                categories, cashFlowHistory; merchant categories GET/PUT/DELETE)
   auth.ts       Stores the API key in this browser only
   types.ts      Types for the API's summary and performance datasets
   dashboard.ts  Views: net worth, category tiles, account panels, trend pills, key prompt, errors
@@ -191,6 +208,7 @@ src/
   filterbox.ts  The transactions filter box: grouping list + free-text search (ARIA combobox)
   subscriptions.ts Recurring-charge detection and the Subscriptions screen
   spending.ts   Spending slices, periods, totals, donut and legend
+  rules.ts      Your merchant categories (by merchantId), saved on the service
   trends.ts     24h / 90-day investment trends from the saved performance file, in-memory cache
   main.ts       App shell, nav, key prompt flow, refresh + 5-minute polling, routing + screen transitions
   config.ts     Personal settings (emergency fund account and monthly expenses)

@@ -27,9 +27,22 @@ import {
 import { cached } from "./cache";
 import { detectSubscriptions, isSubSort, renderSubscriptions, subscriptionsShellHtml, type SubSort } from "./subscriptions";
 import {
+  clearRules,
+  dropLegacyRules,
+  legacyNameKey,
+  legacyRules,
+  loadRules,
+  ruleById,
+  rulesLoaded,
+  setCategory,
+  setRule,
+} from "./rules";
+import {
   isRangeKey,
   isSliceKey,
   renderSpendingChart,
+  SLICES,
+  sliceResolver,
   spendingBreakdown,
   spendingListHeadHtml,
   spendingShellHtml,
@@ -127,6 +140,7 @@ function clearData(): void {
   balanceHistory.clear();
   transactions.clear();
   categories.clear();
+  clearRules();
 }
 
 function renderFreshness(): void {
@@ -393,10 +407,15 @@ function drawTransactions(): void {
   const data = transactions.peek();
   if (!card || !data) return;
   const cats = categories.peek()?.data.spData ?? null;
-  const view = renderTransactions(card, data.data, cats, accountUi.id, accountUi.page, {
-    category: accountUi.category,
-    query: accountUi.query,
-  });
+  const view = renderTransactions(
+    card,
+    data.data,
+    cats,
+    accountUi.id,
+    accountUi.page,
+    { category: accountUi.category, query: accountUi.query },
+    currentSliceResolver(),
+  );
   accountUi.page = view.page;
   showOpenTxn();
   // Drop a grouping the filter doesn't offer (e.g. a stale link), once categories are in.
@@ -408,13 +427,54 @@ function drawTransactions(): void {
 
 /** Transactions plus the category list. A failed category list just leaves the filter out. */
 async function loadTransactions(): Promise<void> {
+  const isKeyError = (err: unknown) => err instanceof ApiError && (err.kind === "unauthorized" || err.kind === "no-key");
   await Promise.all([
     transactions.get(),
     categories.get().catch((err: unknown) => {
-      if (err instanceof ApiError && (err.kind === "unauthorized" || err.kind === "no-key")) throw err;
+      if (isKeyError(err)) throw err;
       console.warn("Couldn't load transaction categories; showing transactions without the filter.", err);
     }),
+    // Your merchant categories (saved on the service). Without them, spending is automatic only.
+    loadRules().catch((err: unknown) => {
+      if (isKeyError(err)) throw err;
+      console.warn("Couldn't load your merchant categories; spending categories are automatic for now.", err);
+    }),
   ]);
+  await migrateLegacyRules();
+}
+
+/**
+ * Move rules saved in this browser by the previous version (by transaction name) to the
+ * service (by merchant ID), once. Names are matched to merchant IDs through the loaded
+ * transactions; a merchant that already has a category on the service keeps it.
+ */
+let migrating = false;
+async function migrateLegacyRules(): Promise<void> {
+  const legacy = legacyRules();
+  const all = transactions.peek()?.data.spData?.transactions;
+  if (!legacy.length || migrating || !rulesLoaded() || !all) return;
+  migrating = true;
+  try {
+    let moved = 0;
+    const unmatched: string[] = [];
+    for (const r of legacy) {
+      const ids = [...new Set(all.filter((t) => t.merchantId && legacyNameKey(t) === r.key).map((t) => t.merchantId!))];
+      if (!ids.length) unmatched.push(`“${r.label}”`);
+      for (const id of ids) {
+        if (ruleById(id)) continue;
+        await setRule(id, r.slice);
+        moved++;
+      }
+    }
+    dropLegacyRules();
+    infoNotice =
+      `Moved ${moved} saved categor${moved === 1 ? "y" : "ies"} from this browser to your service.` +
+      (unmatched.length ? ` Couldn't match ${unmatched.join(", ")} to a merchant, so ${unmatched.length === 1 ? "it was" : "they were"} dropped.` : "");
+  } catch (err) {
+    console.warn("Couldn't move your saved categories to the service yet; will try again.", err);
+  } finally {
+    migrating = false;
+  }
 }
 
 async function loadAccountData(id: number, withChart: boolean): Promise<void> {
@@ -576,8 +636,84 @@ async function loadSubscriptions(): Promise<void> {
 
 // ---------- Spending screen ----------
 
-/** The list under the chart: its page and expanded row, reset when the period or slice changes. */
-let spendingUi: { view: string; page: number; openTxn: string | null } = { view: "", page: 0, openTxn: null };
+/** The list under the chart: its page, expanded row and last rule change, reset when the period or slice changes. */
+let spendingUi: {
+  view: string;
+  page: number;
+  openTxn: string | null;
+  /** The last category change (with what to restore on Undo), or a save error. */
+  notice: { text: string; undo?: { merchantId: string; category: string | null }; error?: boolean } | null;
+} = { view: "", page: 0, openTxn: null, notice: null };
+/** A one-off message (e.g. after moving old rules), shown until the next category change. */
+let infoNotice: string | null = null;
+
+/** Automatic slice + your rule for any loaded transaction (used by the category picker in transaction details). */
+function currentSliceResolver() {
+  const data = transactions.peek()?.data;
+  if (!data) return undefined;
+  return sliceResolver(data.spData?.transactions ?? [], categories.peek()?.data.spData ?? null, data.spData?.endDate ?? todayYmd());
+}
+
+function noticeHtml(): string {
+  const n = spendingUi.notice;
+  if (!n) return infoNotice ? `<p class="spend-notice" role="status">${esc(infoNotice)}</p>` : "";
+  const undo = n.undo ? ` <button type="button" class="link-btn small" data-action="undo-rule">Undo</button>` : "";
+  return `<p class="spend-notice${n.error ? " is-error" : ""}" role="${n.error ? "alert" : "status"}">${esc(n.text)}${undo}</p>`;
+}
+
+/** Latest description per merchantId, for naming merchants in the rules list. */
+const merchantNames = new WeakMap<object, Map<string, string>>();
+function merchantName(merchantId: string): string | undefined {
+  const all = transactions.peek()?.data.spData?.transactions;
+  if (!all) return undefined;
+  let names = merchantNames.get(all);
+  if (!names) {
+    names = new Map();
+    for (const t of [...all].sort((a, b) => (a.transactionDate ?? "").localeCompare(b.transactionDate ?? ""))) {
+      if (t.merchantId && t.description) names.set(t.merchantId, t.description);
+    }
+    merchantNames.set(all, names);
+  }
+  return names.get(merchantId);
+}
+
+/**
+ * Set a merchant's spending category (null: back to automatic). The screen updates at
+ * once; if saving to the service fails, the change is undone and the error shown.
+ */
+async function applyRule(merchantId: string, label: string, slice: SliceKey | null, focusKey?: string): Promise<void> {
+  const before = ruleById(merchantId);
+  if ((before?.slice ?? null) === slice && (slice !== null || !before)) return;
+  const saving = setRule(merchantId, slice); // updates the list straight away
+  const all = transactions.peek()?.data.spData?.transactions ?? [];
+  const n = all.filter((t) => t.merchantId === merchantId).length;
+  const where = slice ? `now count as ${SLICES.find((s) => s.key === slice)?.label}` : "are back to automatic";
+  infoNotice = null;
+  spendingUi.notice = {
+    text: `${n} “${label}” transaction${n === 1 ? "" : "s"} ${where}.`,
+    undo: { merchantId, category: before?.category ?? null },
+  };
+  redrawAfterRule(focusKey);
+  try {
+    await saving;
+  } catch (err) {
+    if (handleKeyError(err)) return;
+    spendingUi.notice = {
+      text: `Couldn't save the category for “${label}”: ${err instanceof Error ? err.message : String(err)}`,
+      error: true,
+    };
+    redrawAfterRule(focusKey);
+  }
+}
+
+/** Redraw whichever screen shows spending categories after a rule changes. */
+function redrawAfterRule(focusKey?: string): void {
+  if (current === "spending") drawSpending();
+  else if (current === "account") drawTransactions();
+  if (focusKey) {
+    root.querySelector<HTMLElement>(`select[data-spend-assign="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
+  }
+}
 const spendList = () => spendScreen.querySelector<HTMLElement>("[data-role='spend-list']");
 
 function renderSpendingScreen(): void {
@@ -596,17 +732,17 @@ function drawSpending(): void {
   if (!data || !isSpendingRoute()) return;
   const { range, slice } = routeSpending();
   const view = `${range}|${slice ?? ""}`;
-  if (spendingUi.view !== view) spendingUi = { view, page: 0, openTxn: null };
+  if (spendingUi.view !== view) spendingUi = { view, page: 0, openTxn: null, notice: null };
 
   const cats = categories.peek()?.data.spData ?? null;
   const b = spendingBreakdown(data.spData?.transactions ?? [], cats, range, data.spData?.endDate ?? todayYmd(), data.spData?.startDate);
-  renderSpendingChart(spendScreen, b, range, slice);
+  renderSpendingChart(spendScreen, b, range, slice, merchantName);
 
   const list = spendList();
   if (!list) return;
   const sel = b.slices.find((s) => s.key === slice);
   if (!sel) {
-    list.innerHTML = spendingListHeadHtml(b, null);
+    list.innerHTML = noticeHtml() + spendingListHeadHtml(b, null);
     return;
   }
   const pages = Math.max(1, Math.ceil(sel.transactions.length / PAGE_SIZE));
@@ -614,9 +750,10 @@ function drawSpending(): void {
   const accountOf = (t: Transaction) =>
     (summary && typeof t.userAccountId === "number" ? findAccount(summary, t.userAccountId)?.account.name : undefined) ?? t.accountName;
   list.innerHTML =
+    noticeHtml() +
     spendingListHeadHtml(b, slice) +
     (sel.transactions.length
-      ? pagedTransactionsHtml(sel.transactions, cats ? indexCategories(cats) : null, spendingUi.page, accountOf)
+      ? pagedTransactionsHtml(sel.transactions, cats ? indexCategories(cats) : null, spendingUi.page, accountOf, currentSliceResolver())
       : `<p class="muted txn-empty">No ${sel.label.toLowerCase()} transactions in this period.</p>`);
   showOpenTxn(list, spendingUi.openTxn);
 }
@@ -712,6 +849,8 @@ root.addEventListener("click", (e) => {
     if (current === "account" || current === "subscriptions" || current === "spending") {
       balanceHistory.clear();
       transactions.clear();
+      // Pick up category changes made on another device.
+      if (current !== "subscriptions") void loadRules(true).catch(() => {});
     }
     return;
   }
@@ -729,6 +868,28 @@ root.addEventListener("click", (e) => {
     drawChart();
     return;
   }
+  // Spending category rules: remove one, or undo the last change.
+  const removeBtn = el.closest<HTMLElement>("[data-rule-remove]");
+  if (removeBtn) {
+    const id = removeBtn.dataset.ruleRemove ?? "";
+    void applyRule(id, merchantName(id) ?? id, null);
+    return;
+  }
+  if (el.closest("[data-action='undo-rule']")) {
+    const undo = spendingUi.notice?.undo;
+    if (undo) {
+      spendingUi.notice = null;
+      const saving = setCategory(undo.merchantId, undo.category);
+      redrawAfterRule();
+      saving.catch((err: unknown) => {
+        if (handleKeyError(err)) return;
+        spendingUi.notice = { text: `Couldn't undo: ${err instanceof Error ? err.message : String(err)}`, error: true };
+        redrawAfterRule();
+      });
+    }
+    return;
+  }
+
   // Spending: period switch and slice selection (kept in the URL, replacing the history entry).
   const rangeSwitch = el.closest<HTMLElement>("[data-spend-range]");
   if (rangeSwitch) {
@@ -866,6 +1027,23 @@ function setFilter(filter: FilterState): void {
   syncFilterToUrl();
   drawTransactions();
 }
+
+// Spending category pickers: in a transaction's details, and in the rules list.
+root.addEventListener("change", (e) => {
+  const target = e.target as Element;
+  const assign = target.closest<HTMLSelectElement>("select[data-spend-assign]");
+  if (assign) {
+    const id = assign.dataset.spendAssign ?? "";
+    void applyRule(id, assign.dataset.label ?? id, isSliceKey(assign.value) ? assign.value : null, id);
+    return;
+  }
+  const ruleSelect = target.closest<HTMLSelectElement>("select[data-rule-key]");
+  if (ruleSelect && isSliceKey(ruleSelect.value)) {
+    const id = ruleSelect.dataset.ruleKey ?? "";
+    void applyRule(id, ruleSelect.dataset.ruleLabel ?? id, ruleSelect.value);
+    spendScreen.querySelector<HTMLElement>(`select[data-rule-key="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
+  }
+});
 
 root.addEventListener("submit", (e) => {
   const form = (e.target as Element).closest<HTMLFormElement>("[data-form='api-key']");

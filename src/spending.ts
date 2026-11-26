@@ -1,10 +1,15 @@
-// Spending: where money went, as a donut of five slices, for a chosen period.
+// Spending: where money went, as a donut of seven slices, for a chosen period.
 //
 // Each spending transaction lands in exactly one slice, checked in this order:
+// 0. Your rules (rules.ts, saved on the service by merchantId): every transaction from a
+//    merchant you've assigned goes to that slice, whatever its category. A rule can also
+//    bring in money that wouldn't count otherwise (e.g. a transfer you consider spending).
 // 1. Subscriptions: charges that belong to a detected subscription (including ones
 //    that have since ended, so past periods count them), from subscriptions.ts.
-// 2. Restaurants, Groceries, Utilities: by the category list's name for the
-//    transaction's categoryId (Utilities also covers Cable/Satellite and Telephone).
+// 2. Restaurants, Groceries/Household, Utilities, Pets, Interest & Fees: by the category
+//    list's name for the transaction's categoryId (Utilities also covers Cable/Satellite and
+//    Telephone). Interest & Fees also takes money out in Empower's "Interest" category
+//    (interest charged), which sits in the Income group; interest earned isn't spending.
 // 3. Other shopping: every other Expense (or Uncategorized) transaction.
 // Spending is money out in the Expense group; transfers, card payments and income
 // aren't spending. Refunds in a slice (money in, Expense category) reduce it.
@@ -14,23 +19,29 @@ import { indexCategories, type CategoryIndex } from "./categories";
 import { detectSubscriptions } from "./subscriptions";
 import { dayNumber } from "./chart";
 import { esc, mediumDate, moneyCents, money } from "./format";
+import { allRules, ruleFor } from "./rules";
 
-export type SliceKey = "restaurants" | "groceries" | "subscriptions" | "utilities" | "other";
+export type SliceKey = "restaurants" | "groceries" | "subscriptions" | "utilities" | "pets" | "fees" | "other";
 
 export interface SliceDef {
   key: SliceKey;
   label: string;
-  /** Categorical colours, validated as a set (and the donut's wrap-around pair) on the dark card surface. */
+  /**
+   * Categorical colours, validated in ring order (each slice against its neighbours, including
+   * the wrap-around pair) on the dark card surface.
+   */
   color: string;
   /** Category names (lower case) that belong here; matched by the category list, not the transaction's label. */
   categories?: string[];
+  /** Categories outside the Expense group whose money-out transactions belong here (e.g. interest charged). */
+  debitCategories?: string[];
   note: string;
 }
 
 /** In ring and legend order. Colours follow the slice, never its rank. */
 export const SLICES: SliceDef[] = [
   { key: "restaurants", label: "Restaurants", color: "#338ced", categories: ["restaurants"], note: "Restaurants category" },
-  { key: "groceries", label: "Groceries", color: "#e76624", categories: ["groceries"], note: "Groceries category" },
+  { key: "groceries", label: "Groceries/Household", color: "#e76624", categories: ["groceries"], note: "Groceries category" },
   { key: "subscriptions", label: "Subscriptions", color: "#00a888", note: "Charges from recurring subscriptions (see Subscriptions)" },
   {
     key: "utilities",
@@ -38,6 +49,15 @@ export const SLICES: SliceDef[] = [
     color: "#d28e05",
     categories: ["utilities", "cable/satellite", "telephone"],
     note: "Utilities, Cable/Satellite and Telephone categories",
+  },
+  { key: "pets", label: "Pets", color: "#9887ef", categories: ["pets/pet care"], note: "Pets/Pet Care category" },
+  {
+    key: "fees",
+    label: "Interest & Fees",
+    color: "#0aac23",
+    categories: ["service charges/fees", "advisory fee"],
+    debitCategories: ["interest"],
+    note: "Service Charges/Fees and Advisory Fee categories, plus interest charged",
   },
   { key: "other", label: "Other shopping", color: "#e24d8b", note: "Every other spending category" },
 ];
@@ -92,7 +112,7 @@ export interface SpendingBreakdown {
 
 const amountOf = (t: Transaction): number => (typeof t.amount === "number" ? Math.abs(t.amount) : 0);
 
-/** Which slice a spending transaction belongs to, or null when it isn't spending. */
+/** Which slice a transaction belongs to automatically (ignoring your rules), or null when it isn't spending. */
 function classifier(all: Transaction[], categories: TransactionCategory[] | null, asOf: string) {
   const index: CategoryIndex | null = categories ? indexCategories(categories) : null;
   const subscriptionCharges = new Set<Transaction>();
@@ -100,10 +120,17 @@ function classifier(all: Transaction[], categories: TransactionCategory[] | null
     for (const t of s.charges) subscriptionCharges.add(t);
   }
   const byName = new Map<string, SliceKey>();
-  for (const s of SLICES) for (const c of s.categories ?? []) byName.set(c, s.key);
+  const debitByName = new Map<string, SliceKey>();
+  for (const s of SLICES) {
+    for (const c of s.categories ?? []) byName.set(c, s.key);
+    for (const c of s.debitCategories ?? []) debitByName.set(c, s.key);
+  }
 
   return (t: Transaction): SliceKey | null => {
     if (t.isDuplicate || !t.transactionDate || !(amountOf(t) > 0)) return null;
+    const catName = index && typeof t.categoryId === "number" ? index.byId.get(t.categoryId)?.name?.toLowerCase() : undefined;
+    // Money out in a non-Expense category that a slice claims (interest charged).
+    if (catName && !t.isCredit && debitByName.has(catName)) return debitByName.get(catName)!;
     if (index) {
       const group = index.groupOf(t);
       if (group !== "EXPENSE" && group !== "UNCATEGORIZED" && group !== undefined) return null;
@@ -111,13 +138,43 @@ function classifier(all: Transaction[], categories: TransactionCategory[] | null
       return null;
     }
     if (subscriptionCharges.has(t)) return "subscriptions";
-    const name = index && typeof t.categoryId === "number" ? index.byId.get(t.categoryId)?.name?.toLowerCase() : undefined;
-    return (name && byName.get(name)) || "other";
+    return (catName && byName.get(catName)) || "other";
   };
 }
 
 const classifiers = new WeakMap<object, WeakMap<object, ReturnType<typeof classifier>>>();
 const NO_CATEGORIES = {};
+
+/** The automatic classifier for this data, built once (subscription detection runs over all 12 months). */
+function autoClassifier(all: Transaction[], categories: TransactionCategory[] | null, asOf: string) {
+  let perData = classifiers.get(all);
+  if (!perData) classifiers.set(all, (perData = new WeakMap()));
+  let classify = perData.get(categories ?? NO_CATEGORIES);
+  if (!classify) perData.set(categories ?? NO_CATEGORIES, (classify = classifier(all, categories, asOf)));
+  return classify;
+}
+
+export interface SliceInfo {
+  /** Where it goes on its own (null: not spending). */
+  auto: SliceKey | null;
+  /** Your rule for its name, if any. */
+  manual: SliceKey | null;
+}
+
+/** For a transaction: its automatic slice and your rule. */
+export function sliceResolver(all: Transaction[], categories: TransactionCategory[] | null, asOf: string): (t: Transaction) => SliceInfo {
+  const auto = autoClassifier(all, categories, asOf);
+  return (t) => ({ auto: auto(t), manual: ruleFor(t)?.slice ?? null });
+}
+
+/** The slice a transaction counts in: your rule first (if it names a slice), then the automatic one. */
+function finalSlice(t: Transaction, auto: (t: Transaction) => SliceKey | null): SliceKey | null {
+  const rule = ruleFor(t);
+  if (rule?.slice) {
+    return t.isDuplicate || !t.transactionDate || !(amountOf(t) > 0) ? null : rule.slice;
+  }
+  return auto(t);
+}
 
 /** Spending by slice for `range`, newest transactions first in each slice. */
 export function spendingBreakdown(
@@ -127,11 +184,7 @@ export function spendingBreakdown(
   asOf: string,
   dataStart?: string,
 ): SpendingBreakdown {
-  // Subscription detection runs over all 12 months once per data load, not per period.
-  let perData = classifiers.get(all);
-  if (!perData) classifiers.set(all, (perData = new WeakMap()));
-  let classify = perData.get(categories ?? NO_CATEGORIES);
-  if (!classify) perData.set(categories ?? NO_CATEGORIES, (classify = classifier(all, categories, asOf)));
+  const auto = autoClassifier(all, categories, asOf);
 
   const period = periodOf(range, asOf);
   const from = dayNumber(period.start);
@@ -140,7 +193,7 @@ export function spendingBreakdown(
   for (const t of all) {
     const day = t.transactionDate ? dayNumber(t.transactionDate) : NaN;
     if (!(day >= from && day <= to)) continue;
-    const key = classify(t);
+    const key = finalSlice(t, auto);
     if (!key) continue;
     const b = buckets.get(key)!;
     b.net += t.isCredit ? -amountOf(t) : amountOf(t);
@@ -198,8 +251,17 @@ function arc(cx: number, cy: number, r: number, inner: number, a0: number, a1: n
   return `M ${pt(r, a0)} A ${r} ${r} 0 ${large} 1 ${pt(r, a1)} L ${pt(inner, a1)} A ${inner} ${inner} 0 ${large} 0 ${pt(inner, a0)} Z`;
 }
 
-/** The donut, legend and centre total. `selected` slice is pulled out; the rest dim. */
-export function renderSpendingChart(screen: HTMLElement, b: SpendingBreakdown, range: RangeKey, selected: SliceKey | null): void {
+/**
+ * The donut, legend and centre total. `selected` slice is pulled out; the rest dim.
+ * `merchantName` names a merchantId for the rules list.
+ */
+export function renderSpendingChart(
+  screen: HTMLElement,
+  b: SpendingBreakdown,
+  range: RangeKey,
+  selected: SliceKey | null,
+  merchantName: (merchantId: string) => string | undefined = () => undefined,
+): void {
   for (const btn of screen.querySelectorAll<HTMLElement>("[data-spend-range]")) {
     btn.setAttribute("aria-pressed", String(btn.dataset.spendRange === range));
   }
@@ -236,6 +298,7 @@ export function renderSpendingChart(screen: HTMLElement, b: SpendingBreakdown, r
     ? `<span class="spend-centre__label">${esc(sel.label)}</span><span class="spend-centre__value">${esc(money(sel.total))}</span><span class="spend-centre__note">${esc(pct.format(sel.share))} of spending</span>`
     : `<span class="spend-centre__label">Spent</span><span class="spend-centre__value">${esc(money(b.total))}</span><span class="spend-centre__note">${esc(RANGES.find(([k]) => k === range)?.[1] ?? "")}</span>`;
 
+  const rulesOpen = host.querySelector<HTMLDetailsElement>(".spend-rules")?.open ?? false;
   const legend = b.slices
     .map(
       (s) => `
@@ -243,7 +306,7 @@ export function renderSpendingChart(screen: HTMLElement, b: SpendingBreakdown, r
         <button type="button" class="spend-key${s.total === 0 ? " is-zero" : ""}" data-spend-slice="${s.key}" aria-pressed="${selected === s.key}"
           title="${esc(s.note)}">
           <span class="spend-key__swatch" style="background:${s.color}" aria-hidden="true"></span>
-          <span class="spend-key__name">${esc(s.label)}</span>
+          <span class="spend-key__name">${esc(s.label).replace(/\//g, "/<wbr>")}</span>
           <span class="spend-key__amt">${esc(moneyCents(s.total))}</span>
           <span class="spend-key__pct">${esc(pct.format(s.share))}</span>
         </button>
@@ -260,7 +323,10 @@ export function renderSpendingChart(screen: HTMLElement, b: SpendingBreakdown, r
         <div class="spend-tip" role="status" hidden></div>
       </div>
       <ul class="spend-legend" aria-label="Categories">${legend}</ul>
-    </div>`;
+    </div>
+    ${rulesHtml(merchantName)}`;
+  const rulesBox = host.querySelector<HTMLDetailsElement>(".spend-rules");
+  if (rulesBox && rulesOpen) rulesBox.open = true;
 
   // Hover tooltip on the slices (the legend carries the same figures for keyboard and touch).
   const svg = host.querySelector<SVGSVGElement>("svg")!;
@@ -279,6 +345,34 @@ export function renderSpendingChart(screen: HTMLElement, b: SpendingBreakdown, r
     tip.style.top = `${Math.max(0, e.clientY - box.top - tip.offsetHeight - 14)}px`;
   });
   svg.addEventListener("pointerleave", () => (tip.hidden = true));
+}
+
+/** Your merchant categories, to review, change or remove. Empty when there are none. */
+function rulesHtml(merchantName: (merchantId: string) => string | undefined): string {
+  const rules = allRules()
+    .map((r) => ({ ...r, name: merchantName(r.merchantId) ?? r.merchantId }))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+  if (!rules.length) return "";
+  const options = (r: (typeof rules)[number]) =>
+    (r.slice ? "" : `<option value="" selected disabled>${esc(r.category)} (not used)</option>`) +
+    SLICES.map((s) => `<option value="${s.key}"${s.key === r.slice ? " selected" : ""}>${esc(s.label)}</option>`).join("");
+  return `
+    <details class="spend-rules">
+      <summary>Your merchant categories <span class="count">${count.format(rules.length)}</span></summary>
+      <p class="muted small">Every transaction from one of these merchants counts in the category you chose. Saved on your service, so they're the same on every device.</p>
+      <ul>
+        ${rules
+          .map(
+            (r) => `
+          <li class="spend-rule"${r.slice ? "" : ` title="“${esc(r.category)}” isn't one of the spending categories, so the chart ignores it. Pick one to use it here."`}>
+            <span class="spend-rule__name" title="Merchant ID ${esc(r.merchantId)}">${esc(r.name)}</span>
+            <select class="spend-rule__select" data-rule-key="${esc(r.merchantId)}" data-rule-label="${esc(r.name)}" aria-label="Category for ${esc(r.name)}">${options(r)}</select>
+            <button type="button" class="link-btn small" data-rule-remove="${esc(r.merchantId)}" aria-label="Remove the category for ${esc(r.name)}">Remove</button>
+          </li>`,
+          )
+          .join("")}
+      </ul>
+    </details>`;
 }
 
 /** Heading for the transaction list under the chart. */

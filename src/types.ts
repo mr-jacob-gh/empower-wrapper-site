@@ -173,6 +173,14 @@ export interface Categories {
   spData?: TransactionCategory[];
 }
 
+/** `/merchant-categories`: your own category name for a merchant, saved on the PC. */
+export interface MerchantCategory {
+  /** Matches transactions[].merchantId. */
+  merchantId: string;
+  /** Free text, 1–100 characters. */
+  category: string;
+}
+
 export interface ApiErrorBody {
   error: string;
   httpStatus?: number | null;

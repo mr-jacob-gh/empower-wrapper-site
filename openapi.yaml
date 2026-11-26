@@ -1,10 +1,11 @@
 openapi: 3.1.0
 info:
   title: Empower Local Service API
-  version: 1.3.0
+  version: 1.4.0
   description: |
-    Read-only access to one person's Empower (Personal Dashboard) financial data, collected by a
-    Windows service running on their own PC.
+    Access to one person's Empower (Personal Dashboard) financial data, collected by a Windows
+    service running on their own PC. The Empower data is read-only. The only thing clients can
+    change is the user's own list of custom merchant categories (`/merchant-categories`).
 
     ## Connecting
     - **HTTPS only.** From the internet: `https://beefjerky67.asuscomm.com:44300`. On the user's
@@ -20,7 +21,8 @@ info:
       `openssl x509 -inform DER -in https-cert.cer -out https-cert.pem`) or pin its SHA-256
       fingerprint. Do **not** disable certificate verification: that would expose the API key.
     - **Browser apps (CORS)**: only listed origins may call from a web page (currently
-      `https://mr-jacob-gh.github.io`). Preflight `OPTIONS` requests need no key; every response,
+      `https://mr-jacob-gh.github.io`). Preflight `OPTIONS` requests need no key and allow methods
+      `GET, POST, PUT, DELETE` and headers `X-API-Key, Authorization, Content-Type`. Every response,
       including 401, carries `Access-Control-Allow-Origin` for allowed origins; `X-Data-Source` and
       `X-Date-Range` are exposed to the page.
 
@@ -78,6 +80,8 @@ tags:
     description: Saved datasets (no Empower call unless a date range is passed)
   - name: control
     description: Status and on-demand fetching from Empower
+  - name: merchant-categories
+    description: The user's own category names for merchants, saved on the PC
 
 paths:
   /:
@@ -236,6 +240,124 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/JobStatus" }
 
+  /merchant-categories:
+    get:
+      tags: [merchant-categories]
+      summary: Get all custom merchant categories
+      description: |
+        The user's custom category for each merchant, as saved by the web app. Returns `[]` when
+        nothing has been saved yet. Entries keep the order they were saved in; new single entries
+        are added at the end. Match a transaction to an entry with `transactions[].merchantId`.
+      operationId: getMerchantCategories
+      responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "200":
+          description: The saved list.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MerchantCategoryList" }
+              example: [{ merchantId: "a1b2c3", category: "Coffee" }, { merchantId: "d4e5f6", category: "Pet Food" }]
+        "500":
+          description: The saved file exists but can't be read. A full `PUT` replaces it.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    put:
+      tags: [merchant-categories]
+      summary: Replace the whole list
+      description: |
+        Saves the body as the complete list, replacing what was there. Values are trimmed of
+        surrounding spaces. Rules: `merchantId` and `category` are required and non-blank;
+        `merchantId` is at most 200 characters, `category` at most 100; each `merchantId` appears
+        once; at most 50,000 entries; body at most 1 MB. If any rule fails, nothing is saved.
+        Send `[]` to clear the list. The previous version is kept on the PC as a backup.
+      operationId: replaceMerchantCategories
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MerchantCategoryList" }
+            example: [{ merchantId: "a1b2c3", category: "Coffee" }]
+      responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "200":
+          description: The list as saved (trimmed).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MerchantCategoryList" }
+        "400":
+          description: The body isn't valid JSON, isn't an array of entries, or breaks a rule. The message says which.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "Entry 1: merchantId \"a1b2c3\" appears more than once." }
+
+  /merchant-categories/{merchantId}:
+    parameters:
+      - name: merchantId
+        in: path
+        required: true
+        description: The merchant's ID (as in `transactions[].merchantId`). URL-encode it.
+        schema: { type: string, maxLength: 200 }
+    put:
+      tags: [merchant-categories]
+      summary: Set one merchant's category
+      description: |
+        Adds the merchant if it isn't in the list (at the end), or changes its category if it is.
+        The other entries are untouched, so concurrent single-entry saves never overwrite each
+        other. Same rules as the full list. The category is trimmed.
+      operationId: setMerchantCategory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [category]
+              properties:
+                category: { type: string, minLength: 1, maxLength: 100 }
+            example: { category: "Coffee" }
+      responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "200":
+          description: The merchant already had an entry; its category was changed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MerchantCategory" }
+        "201":
+          description: The merchant was added.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MerchantCategory" }
+        "400":
+          description: Missing/blank/too-long category, too-long merchantId, bad JSON, or the list is full.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: The saved file can't be read (see GET).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    delete:
+      tags: [merchant-categories]
+      summary: Remove one merchant's category
+      operationId: deleteMerchantCategory
+      responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "204":
+          description: Removed.
+        "404":
+          description: The merchant has no custom category.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: The saved file can't be read (see GET).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   /status:
     get:
       tags: [control]
@@ -376,6 +498,19 @@ components:
         daysLeft: { type: integer, description: "Days until it expires." }
         names: { type: array, items: { type: string }, description: "DNS names it covers." }
         sha256: { type: string, description: "SHA-256 fingerprint (hex), for pinning." }
+
+    MerchantCategory:
+      type: object
+      required: [merchantId, category]
+      properties:
+        merchantId: { type: string, minLength: 1, maxLength: 200, description: "Matches transactions[].merchantId." }
+        category: { type: string, minLength: 1, maxLength: 100, description: "The user's category name (free text)." }
+
+    MerchantCategoryList:
+      type: array
+      maxItems: 50000
+      description: Each merchantId appears at most once.
+      items: { $ref: "#/components/schemas/MerchantCategory" }
 
     Error:
       type: object

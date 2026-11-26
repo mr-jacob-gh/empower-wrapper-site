@@ -5,6 +5,7 @@
 import type { NetWorthHistory, Transaction, TransactionCategory, Transactions } from "./types";
 import { ALL, filterOptions, indexCategories, warnUnknownCategories, type CategoryIndex, type Selection } from "./categories";
 import { filterBoxHtml, updateFilterBox, type BoxOption, type FilterState } from "./filterbox";
+import { SLICES, type SliceInfo } from "./spending";
 import { dateTime, esc, mediumDate, moneyCents, moneyParts, monthYear, shortDate, signedPercent, timeAgo } from "./format";
 import { icons } from "./icons";
 import { hasTrends, signedBalance, syncedHtml, type GroupInfo, type Row } from "./dashboard";
@@ -241,8 +242,32 @@ function showValue(v: unknown): string {
   return String(v);
 }
 
+/** Assign this transaction's merchant to a spending category (or back to automatic). */
+function assignHtml(t: Transaction, info: SliceInfo, key: string): string {
+  const name = (t.description || t.originalDescription || "this merchant").trim();
+  const autoLabel = info.auto ? (SLICES.find((s) => s.key === info.auto)?.label ?? "") : "Not counted as spending";
+  const id = `assign-${key}`;
+  if (!t.merchantId) {
+    return `
+    <div class="txn-assign">
+      <label for="${esc(id)}">Spending category</label>
+      <select id="${esc(id)}" disabled><option>Automatic (${esc(autoLabel)})</option></select>
+      <span class="muted small">Empower didn't give this transaction a merchant ID, so it can't be assigned.</span>
+    </div>`;
+  }
+  return `
+    <div class="txn-assign">
+      <label for="${esc(id)}">Spending category</label>
+      <select id="${esc(id)}" data-spend-assign="${esc(t.merchantId)}" data-label="${esc(name)}">
+        <option value=""${info.manual ? "" : " selected"}>Automatic (${esc(autoLabel)})</option>
+        ${SLICES.map((s) => `<option value="${s.key}"${info.manual === s.key ? " selected" : ""}>${esc(s.label)}</option>`).join("")}
+      </select>
+      <span class="muted small">Applies to every transaction from this merchant${info.manual ? " · set by you" : ""}</span>
+    </div>`;
+}
+
 /** Every field of the transaction, labelled; the category comes from the category list. */
-function detailsHtml(t: Transaction, index: CategoryIndex | null): string {
+function detailsHtml(t: Transaction, index: CategoryIndex | null, info?: SliceInfo, key = ""): string {
   const rows: [string, string][] = [];
   const known = new Set<string>();
   const record = t as Record<string, unknown>;
@@ -263,14 +288,14 @@ function detailsHtml(t: Transaction, index: CategoryIndex | null): string {
     if (known.has(key) || v === undefined || v === null || v === "") continue;
     rows.push([labelFromKey(key), showValue(v)]);
   }
-  return `<dl class="txn-details">${rows.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>`;
+  return `${info ? assignHtml(t, info, key) : ""}<dl class="txn-details">${rows.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>`;
 }
 
 /** Key that identifies a row across re-renders. */
 export const txnKey = (t: Transaction, fallback: string): string =>
   typeof t.userTransactionId === "number" ? String(t.userTransactionId) : fallback;
 
-function transactionRow(t: Transaction, index: CategoryIndex | null, key: string, account?: string): string {
+function transactionRow(t: Transaction, index: CategoryIndex | null, key: string, account?: string, info?: SliceInfo): string {
   const [, m, d] = (t.transactionDate ?? "").split("-").map(Number);
   const mon = m ? new Date(2000, m - 1, 1).toLocaleDateString("en-US", { month: "short" }) : "";
   const amount = typeof t.amount === "number" ? Math.abs(t.amount) : null;
@@ -280,7 +305,9 @@ function transactionRow(t: Transaction, index: CategoryIndex | null, key: string
       ? `${qty.format(Math.abs(t.quantity))} sh @ ${moneyCents(t.price)}`
       : "";
   const sub = [t.categoryName || t.transactionType, trade, account].filter(Boolean).map((x) => esc(x!)).join(" · ");
-  const pending = t.status?.toLowerCase() === "pending" ? ` <span class="tag tag--warn">Pending</span>` : "";
+  const pending =
+    (t.status?.toLowerCase() === "pending" ? ` <span class="tag tag--warn">Pending</span>` : "") +
+    (info?.manual ? ` <span class="tag" title="You assigned this name to a spending category">${esc(SLICES.find((s) => s.key === info.manual)?.label ?? "")}</span>` : "");
   const panel = `txn-details-${esc(key)}`;
   // Click the row to show every field; only one row is open at a time (main.ts).
   return `
@@ -294,7 +321,7 @@ function transactionRow(t: Transaction, index: CategoryIndex | null, key: string
         <span class="txn__amt${t.isCredit ? " is-credit" : ""}">${esc(signed)}</span>
         <span class="txn__chev" aria-hidden="true">${icons.chevronDown}</span>
       </button>
-      <div class="txn__details" id="${panel}" hidden>${detailsHtml(t, index)}</div>
+      <div class="txn__details" id="${panel}" hidden>${detailsHtml(t, index, info, key)}</div>
     </li>`;
 }
 
@@ -357,6 +384,7 @@ export function renderTransactions(
   id: number,
   page: number,
   filter: FilterState,
+  sliceOf?: (t: Transaction) => SliceInfo,
 ): TransactionsView {
   const account = accountTransactions(data, id);
   const box = card.querySelector<HTMLElement>("[data-role='txn-filter']")!;
@@ -423,7 +451,7 @@ export function renderTransactions(
     return { page: 0, category: sel };
   }
 
-  body.innerHTML = pagedTransactionsHtml(all, index, p);
+  body.innerHTML = pagedTransactionsHtml(all, index, p, undefined, sliceOf);
   return { page: p, category: sel };
 }
 
@@ -437,6 +465,7 @@ export function pagedTransactionsHtml(
   index: CategoryIndex | null,
   p: number,
   accountOf?: (t: Transaction) => string | undefined,
+  sliceOf?: (t: Transaction) => SliceInfo,
 ): string {
   const pages = Math.max(1, Math.ceil(all.length / PAGE_SIZE));
   const from = p * PAGE_SIZE;
@@ -462,7 +491,7 @@ export function pagedTransactionsHtml(
       .map(
         (g) => `
       <h3 class="txn-month">${esc(g.month ? monthYear(`${g.month}-01`) : "Undated")}</h3>
-      <ul class="txn-list">${g.rows.map((t) => transactionRow(t, index, txnKey(t, `${p}-${shown.indexOf(t)}`), accountOf?.(t))).join("")}</ul>`,
+      <ul class="txn-list">${g.rows.map((t) => transactionRow(t, index, txnKey(t, `${p}-${shown.indexOf(t)}`), accountOf?.(t), sliceOf?.(t))).join("")}</ul>`,
       )
       .join("") + pager
   );
