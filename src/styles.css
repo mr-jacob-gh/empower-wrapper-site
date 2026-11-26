@@ -168,6 +168,12 @@ ul { margin: 0; padding: 0; list-style: none; }
 }
 .chip svg { width: 15px; height: 15px; }
 .chip--warn { color: var(--warn); }
+
+/* Account not synced by Empower in over 24 hours */
+.sync-stale { display: inline-flex; align-items: center; gap: 4px; }
+.sync-stale__icon { display: inline-grid; flex: none; color: var(--warn); }
+.sync-stale__icon svg { width: 13px; height: 13px; }
+.details .sync-stale__icon svg { width: 15px; height: 15px; }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent); }
 
 /* ============================================================

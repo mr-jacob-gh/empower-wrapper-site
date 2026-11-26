@@ -77,6 +77,13 @@ The file is read when you open the Investments panel, reused for 5 minutes, re-r
 only**, for the open tab. It's never written to browser storage, the repo, GitHub or the service,
 and it's dropped when you forget the API key.
 
+## Sync warnings
+
+Wherever an account's sync time is shown (the "Synced … ago" line on dashboard rows and
+"Last synced" on the account screen), an amber warning icon appears in front of it when Empower
+hasn't synced that account for more than 24 hours (`lastRefreshed` in the summary). Hovering or a
+screen reader gives "Not synced in over 24 hours".
+
 ## Account screen
 
 Selecting any account under the Cash, Investments, Credit cards or Loans tiles (anywhere on its

@@ -102,6 +102,21 @@ export interface Row {
   isEmpower: boolean;
 }
 
+// ---------- Sync freshness ----------
+
+/** An account not synced by Empower for longer than this gets a warning icon. */
+export const SYNC_STALE_MS = 24 * 60 * 60 * 1000;
+
+export const isSyncStale = (lastRefreshed: number | undefined): boolean =>
+  typeof lastRefreshed === "number" && Date.now() - lastRefreshed > SYNC_STALE_MS;
+
+/** "Synced 3 days ago" etc., with a warning icon in front when it's over 24 hours old. `text` is escaped here. */
+export function syncedHtml(lastRefreshed: number | undefined, text: string): string {
+  if (!isSyncStale(lastRefreshed)) return esc(text);
+  const tip = "Not synced in over 24 hours";
+  return `<span class="sync-stale" title="${tip}"><span class="sync-stale__icon" role="img" aria-label="${tip}">${icons.alert}</span>${esc(text)}</span>`;
+}
+
 /** Open accounts from the summary, Empower's own first. */
 function openRows(s: Summary): Row[] {
   return [
@@ -147,8 +162,8 @@ function emergencyFundBadge(balance: number): string {
 function accountRow({ account: a, isEmpower }: Row, info: GroupInfo): string {
   const bal = num(a.balance);
   const signed = info.liability ? -Math.abs(bal) : bal;
-  const synced = a.lastRefreshed ? `Synced ${timeAgo(new Date(a.lastRefreshed))}` : "";
-  const sub = [a.firmName, synced].filter(Boolean).map(esc).join(" · ");
+  const synced = a.lastRefreshed ? syncedHtml(a.lastRefreshed, `Synced ${timeAgo(new Date(a.lastRefreshed))}`) : "";
+  const sub = [a.firmName ? esc(a.firmName) : "", synced].filter(Boolean).join(" · ");
   const fund = a.userAccountId === EMERGENCY_FUND.userAccountId ? emergencyFundBadge(bal) : "";
   // Investment-type rows get a slot that applyTrends() fills in.
   const detail = opensDetail(info, a);

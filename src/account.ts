@@ -7,7 +7,7 @@ import { ALL, filterOptions, indexCategories, warnUnknownCategories, type Catego
 import { filterBoxHtml, updateFilterBox, type BoxOption, type FilterState } from "./filterbox";
 import { dateTime, esc, mediumDate, moneyCents, moneyParts, monthYear, shortDate, signedPercent, timeAgo } from "./format";
 import { icons } from "./icons";
-import { hasTrends, signedBalance, type GroupInfo, type Row } from "./dashboard";
+import { hasTrends, signedBalance, syncedHtml, type GroupInfo, type Row } from "./dashboard";
 import { dayNumber, mountLineChart, type Point } from "./chart";
 
 export type ChartRange = "24h" | "90d";
@@ -76,13 +76,14 @@ export function heroHtml({ account: a, isEmpower, info }: Found): string {
   const product = (a.productType ?? "").replace(/_/g, " ").toLowerCase().trim();
   const productLabel = product && product !== type.toLowerCase() ? product[0]!.toUpperCase() + product.slice(1) : "";
   const limit = typeof a.creditLimit === "number" && a.creditLimit > 0 ? a.creditLimit : null;
+  // Values are HTML: escaped here, so "Last synced" can carry its warning icon.
   const details: [string, string][] = [
-    ["Institution", a.firmName ?? ""],
-    ["Type", [type, productLabel].filter(Boolean).join(" · ")],
-    ["Account holder", a.accountHolder ?? ""],
-    ["Credit limit", limit !== null ? moneyCents(limit) : ""],
-    ["Available credit", limit !== null ? moneyCents(Math.max(0, limit - Math.abs(balance))) : ""],
-    ["Last synced", synced ? `${dateTime(synced)} (${timeAgo(synced)})` : ""],
+    ["Institution", esc(a.firmName ?? "")],
+    ["Type", esc([type, productLabel].filter(Boolean).join(" · "))],
+    ["Account holder", esc(a.accountHolder ?? "")],
+    ["Credit limit", limit !== null ? esc(moneyCents(limit)) : ""],
+    ["Available credit", limit !== null ? esc(moneyCents(Math.max(0, limit - Math.abs(balance)))) : ""],
+    ["Last synced", synced ? syncedHtml(a.lastRefreshed, `${dateTime(synced)} (${timeAgo(synced)})`) : ""],
   ];
   return `
   <section class="card acct-hero" data-role="hero">
@@ -98,7 +99,7 @@ export function heroHtml({ account: a, isEmpower, info }: Found): string {
     <dl class="details">
       ${details
         .filter(([, v]) => v)
-        .map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`)
+        .map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${v}</dd></div>`)
         .join("")}
     </dl>
   </section>`;
