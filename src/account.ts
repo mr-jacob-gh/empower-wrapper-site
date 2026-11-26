@@ -1,10 +1,13 @@
-// The account screen: details, balance trend chart (24h / 90d) and transactions
-// (10 per page). Data comes from saved files only (netWorthHistory, transactions).
+// The account screen: details, transactions (10 per page) and, for investment-type
+// accounts, 24h/90d trends and a balance chart. Data comes from saved files only
+// (netWorthHistory, transactions).
 
-import type { NetWorthHistory, Transaction, Transactions } from "./types";
-import { dateTime, esc, moneyCents, moneyParts, shortDate, signedPercent, timeAgo } from "./format";
+import type { NetWorthHistory, Transaction, TransactionCategory, Transactions } from "./types";
+import { ALL, filterOptions, indexCategories, warnUnknownCategories, type CategoryIndex, type Selection } from "./categories";
+import { filterBoxHtml, updateFilterBox, type BoxOption, type FilterState } from "./filterbox";
+import { dateTime, esc, mediumDate, moneyCents, moneyParts, monthYear, shortDate, signedPercent, timeAgo } from "./format";
 import { icons } from "./icons";
-import type { GroupInfo, Row } from "./dashboard";
+import { hasTrends, signedBalance, type GroupInfo, type Row } from "./dashboard";
 import { dayNumber, mountLineChart, type Point } from "./chart";
 
 export type ChartRange = "24h" | "90d";
@@ -22,6 +25,23 @@ export function accountScreenHtml(found: Found, range: ChartRange): string {
   <div class="acct-screen">
     <button type="button" class="btn btn--accent back-btn" data-action="back">${icons.arrowLeft}<span>Back to summary</span></button>
     ${heroHtml(found)}
+    ${hasTrends(found.info) ? chartCardHtml(range) : ""}
+    <section class="card txn-card" aria-labelledby="txn-title">
+      <header class="card-head">
+        <div>
+          <h2 id="txn-title" class="card-head__title">Transactions <span class="count" data-role="txn-count" hidden></span></h2>
+          <div class="muted small" data-role="txn-range"></div>
+          <div class="txn-totals small" data-role="txn-totals" hidden></div>
+        </div>
+        ${filterBoxHtml()}
+      </header>
+      <div data-role="txn-body">${loadingBlock("list")}</div>
+    </section>
+  </div>`;
+}
+
+function chartCardHtml(range: ChartRange): string {
+  return `
     <section class="card chart-card" aria-labelledby="chart-title">
       <header class="card-head">
         <div>
@@ -35,27 +55,33 @@ export function accountScreenHtml(found: Found, range: ChartRange): string {
         </div>
       </header>
       <div data-role="chart-body">${loadingBlock("chart")}</div>
-    </section>
-    <section class="card txn-card" aria-labelledby="txn-title">
-      <header class="card-head">
-        <div>
-          <h2 id="txn-title" class="card-head__title">Transactions <span class="count" data-role="txn-count" hidden></span></h2>
-          <div class="muted small" data-role="txn-range"></div>
-        </div>
-      </header>
-      <div data-role="txn-body">${loadingBlock("list")}</div>
-    </section>
-  </div>`;
+    </section>`;
 }
 
-/** Name, balance, 24h/90d pills (filled by applyTrends) and details. */
+/** Singular names for the hero and details (group labels are plural). */
+const TYPE_LABEL: Partial<Record<string, string>> = {
+  BANK: "Cash",
+  INVESTMENT: "Investment",
+  CREDIT_CARD: "Credit card",
+  LOAN: "Loan",
+};
+
+/** Name, balance, details and, for investment-type accounts, 24h/90d pills (filled by applyTrends). */
 export function heroHtml({ account: a, isEmpower, info }: Found): string {
-  const [whole, cents] = moneyParts(typeof a.balance === "number" ? a.balance : 0);
+  const balance = signedBalance(a, info);
+  const [whole, cents] = moneyParts(balance);
   const synced = a.lastRefreshed ? new Date(a.lastRefreshed) : null;
+  const type = TYPE_LABEL[a.accountTypeGroup ?? ""] ?? info.label;
+  // productType is an enum like "CHECKING" or "CREDIT_CARD": show it as "Checking", unless it repeats the type.
+  const product = (a.productType ?? "").replace(/_/g, " ").toLowerCase().trim();
+  const productLabel = product && product !== type.toLowerCase() ? product[0]!.toUpperCase() + product.slice(1) : "";
+  const limit = typeof a.creditLimit === "number" && a.creditLimit > 0 ? a.creditLimit : null;
   const details: [string, string][] = [
     ["Institution", a.firmName ?? ""],
-    ["Type", info.label],
+    ["Type", [type, productLabel].filter(Boolean).join(" · ")],
     ["Account holder", a.accountHolder ?? ""],
+    ["Credit limit", limit !== null ? moneyCents(limit) : ""],
+    ["Available credit", limit !== null ? moneyCents(Math.max(0, limit - Math.abs(balance))) : ""],
     ["Last synced", synced ? `${dateTime(synced)} (${timeAgo(synced)})` : ""],
   ];
   return `
@@ -64,11 +90,11 @@ export function heroHtml({ account: a, isEmpower, info }: Found): string {
       <div class="acct__icon">${info.icon}</div>
       <div class="acct-hero__titles">
         <h1 class="acct-hero__name">${esc(a.name || a.originalName || "Account")}${isEmpower ? ` <span class="tag">Empower</span>` : ""}</h1>
-        <div class="muted small">${[a.firmName, info.label].filter(Boolean).map(esc).join(" · ")}</div>
+        <div class="muted small">${[a.firmName, type].filter(Boolean).map(esc).join(" · ")}</div>
       </div>
     </div>
-    <div class="acct-hero__bal">${esc(whole)}<span class="acct-hero__cents">${esc(cents)}</span></div>
-    <div class="acct__trends" data-trend-id="${a.userAccountId}"></div>
+    <div class="acct-hero__bal${balance < 0 ? " is-neg" : ""}">${esc(whole)}<span class="acct-hero__cents">${esc(cents)}</span></div>
+    ${hasTrends(info) ? `<div class="acct__trends" data-trend-id="${a.userAccountId}"></div>` : ""}
     <dl class="details">
       ${details
         .filter(([, v]) => v)
@@ -82,7 +108,7 @@ export function notFoundHtml(): string {
   return `
   <div class="acct-screen">
     <button type="button" class="btn btn--accent back-btn" data-action="back">${icons.arrowLeft}<span>Back to summary</span></button>
-    <section class="card muted">That account isn't in your summary, or it isn't an investment account.</section>
+    <section class="card muted">That account isn't in your summary.</section>
   </div>`;
 }
 
@@ -170,7 +196,80 @@ function accountTransactions(data: Transactions, id: number): Transaction[] {
 
 const qty = new Intl.NumberFormat("en-US", { maximumFractionDigits: 4 });
 
-function transactionRow(t: Transaction): string {
+// ---------- Transaction details (expanded row) ----------
+
+const yesNo = (v: unknown): string => (v ? "Yes" : "No");
+const titleCase = (s: string): string => s.replace(/_/g, " ").toLowerCase().replace(/^\w/, (c) => c.toUpperCase());
+
+/** How each known field is labelled and shown, in display order. Unknown fields follow, labelled from their names. */
+const DETAIL_FIELDS: [key: keyof Transaction | string, label: string, show?: (v: unknown, t: Transaction) => string][] = [
+  ["description", "Description"],
+  ["originalDescription", "Original description"],
+  ["transactionDate", "Date", (v) => mediumDate(String(v))],
+  ["amount", "Amount", (v, t) => `${t.isCredit ? "+" : "\u2212"}${moneyCents(Math.abs(Number(v)))}`],
+  ["isCredit", "Direction", (v) => (v ? "Money in" : "Money out")],
+  ["originalAmount", "Original amount", (v) => moneyCents(Number(v))],
+  ["status", "Status", (v) => titleCase(String(v))],
+  ["categoryName", "Category label"],
+  ["categoryType", "Category type", (v) => titleCase(String(v))],
+  ["transactionType", "Transaction type", (v) => titleCase(String(v))],
+  ["investmentType", "Investment type", (v) => titleCase(String(v))],
+  ["price", "Price", (v) => moneyCents(Number(v))],
+  ["quantity", "Quantity", (v) => qty.format(Number(v))],
+  ["currency", "Currency"],
+  ["accountName", "Account"],
+  ["isCashIn", "Cash in", yesNo],
+  ["isCashOut", "Cash out", yesNo],
+  ["isIncome", "Income", yesNo],
+  ["isSpending", "Spending", yesNo],
+  ["isInterest", "Interest", yesNo],
+  ["isDuplicate", "Duplicate", yesNo],
+  ["userTransactionId", "Transaction ID"],
+  ["userAccountId", "Account ID"],
+  ["accountId", "Empower account ID"],
+  ["merchantId", "Merchant ID"],
+];
+
+/** "originalAmount" -> "Original amount" */
+const labelFromKey = (key: string): string =>
+  key.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/^is /i, "").toLowerCase().replace(/^\w/, (c) => c.toUpperCase());
+
+function showValue(v: unknown): string {
+  if (typeof v === "boolean") return yesNo(v);
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
+}
+
+/** Every field of the transaction, labelled; the category comes from the category list. */
+function detailsHtml(t: Transaction, index: CategoryIndex | null): string {
+  const rows: [string, string][] = [];
+  const known = new Set<string>();
+  const record = t as Record<string, unknown>;
+  for (const [key, label, show] of DETAIL_FIELDS) {
+    known.add(key);
+    const v = record[key];
+    if (v === undefined || v === null || v === "") continue;
+    rows.push([label, show ? show(v, t) : showValue(v)]);
+    // The category (from the category list) and its group sit right after the amount details.
+    if (key === "status") {
+      const cat = index && typeof t.categoryId === "number" ? index.byId.get(t.categoryId) : undefined;
+      if (typeof t.categoryId === "number") rows.push(["Category", cat?.name ? `${cat.name} (#${t.categoryId})` : `Unknown (#${t.categoryId})`]);
+      if (index) rows.push(["Group", index.labelOf(index.isUncategorized(t) ? "UNCATEGORIZED" : (index.groupOf(t) ?? ""))]);
+    }
+  }
+  known.add("categoryId");
+  for (const [key, v] of Object.entries(record)) {
+    if (known.has(key) || v === undefined || v === null || v === "") continue;
+    rows.push([labelFromKey(key), showValue(v)]);
+  }
+  return `<dl class="txn-details">${rows.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>`;
+}
+
+/** Key that identifies a row across re-renders. */
+export const txnKey = (t: Transaction, fallback: string): string =>
+  typeof t.userTransactionId === "number" ? String(t.userTransactionId) : fallback;
+
+function transactionRow(t: Transaction, index: CategoryIndex | null, key: string): string {
   const [, m, d] = (t.transactionDate ?? "").split("-").map(Number);
   const mon = m ? new Date(2000, m - 1, 1).toLocaleDateString("en-US", { month: "short" }) : "";
   const amount = typeof t.amount === "number" ? Math.abs(t.amount) : null;
@@ -181,35 +280,146 @@ function transactionRow(t: Transaction): string {
       : "";
   const sub = [t.categoryName || t.transactionType, trade].filter(Boolean).map(esc).join(" · ");
   const pending = t.status?.toLowerCase() === "pending" ? ` <span class="tag tag--warn">Pending</span>` : "";
+  const panel = `txn-details-${esc(key)}`;
+  // Click the row to show every field; only one row is open at a time (main.ts).
   return `
-    <li class="txn">
-      <div class="txn__date" aria-label="${esc(t.transactionDate ? shortDate(t.transactionDate) : "")}"><span class="txn__mon">${esc(mon)}</span><span class="txn__day">${d ?? ""}</span></div>
-      <div class="txn__text">
-        <div class="txn__desc">${esc(t.description || t.originalDescription || "Transaction")}</div>
-        <div class="txn__sub">${sub}${pending}</div>
-      </div>
-      <div class="txn__amt${t.isCredit ? " is-credit" : ""}">${esc(signed)}</div>
+    <li class="txn" data-txn-key="${esc(key)}">
+      <button type="button" class="txn__row" data-txn-toggle="${esc(key)}" aria-expanded="false" aria-controls="${panel}">
+        <span class="txn__date" aria-label="${esc(t.transactionDate ? shortDate(t.transactionDate) : "")}"><span class="txn__mon">${esc(mon)}</span><span class="txn__day">${d ?? ""}</span></span>
+        <span class="txn__text">
+          <span class="txn__desc">${esc(t.description || t.originalDescription || "Transaction")}</span>
+          <span class="txn__sub">${sub}${pending}</span>
+        </span>
+        <span class="txn__amt${t.isCredit ? " is-credit" : ""}">${esc(signed)}</span>
+        <span class="txn__chev" aria-hidden="true">${icons.chevronDown}</span>
+      </button>
+      <div class="txn__details" id="${panel}" hidden>${detailsHtml(t, index)}</div>
     </li>`;
 }
 
-/** Fill the transactions card with one page. Returns the page actually shown (clamped). */
-export function renderTransactions(card: HTMLElement, data: Transactions, id: number, page: number): number {
-  const all = accountTransactions(data, id);
+const count = new Intl.NumberFormat("en-US");
+
+// ---------- Text search ----------
+
+/** Identifier fields are left out of the search: "128" shouldn't match transaction 1128. */
+const isIdField = (key: string): boolean => key === "id" || /Id$/.test(key);
+
+const haystacks = new WeakMap<object, WeakMap<Transaction, string>>();
+const NO_CATEGORIES = {};
+
+/**
+ * Everything a search can match for one transaction, lower-cased: every text and number
+ * field (except IDs), plus how the row shows the date and amount, and the category's
+ * name and group from the category list.
+ */
+function haystack(t: Transaction, index: CategoryIndex | null, categories: object | null): string {
+  let cache = haystacks.get(categories ?? NO_CATEGORIES);
+  if (!cache) haystacks.set(categories ?? NO_CATEGORIES, (cache = new WeakMap()));
+  const hit = cache.get(t);
+  if (hit !== undefined) return hit;
+
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(t)) {
+    if (isIdField(key)) continue;
+    if (typeof value === "string") parts.push(value);
+    else if (typeof value === "number" && Number.isFinite(value)) parts.push(String(value));
+  }
+  if (typeof t.amount === "number") {
+    const amt = Math.abs(t.amount);
+    parts.push(moneyCents(amt), amt.toFixed(2), `${t.isCredit ? "+" : "-"}${moneyCents(amt)}`);
+  }
+  if (t.transactionDate) parts.push(mediumDate(t.transactionDate), monthYear(t.transactionDate));
+  const cat = index && typeof t.categoryId === "number" ? index.byId.get(t.categoryId) : undefined;
+  if (cat?.name) parts.push(cat.name);
+  if (index) parts.push(index.labelOf(index.isUncategorized(t) ? "UNCATEGORIZED" : (index.groupOf(t) ?? "")));
+  const text = parts.join(" \u0000 ").toLowerCase();
+  cache.set(t, text);
+  return text;
+}
+
+export interface TransactionsView {
+  /** The page actually shown (clamped). */
+  page: number;
+  /** The grouping actually applied (ALL while searching, or if the requested one isn't offered). */
+  category: Selection;
+}
+
+/**
+ * Fill the transactions card with one page, filtered by a grouping or a search.
+ * `categories` is null while /data/categories is loading or if it failed: the
+ * groupings are then left out of the filter list, but searching still works.
+ */
+export function renderTransactions(
+  card: HTMLElement,
+  data: Transactions,
+  categories: TransactionCategory[] | null,
+  id: number,
+  page: number,
+  filter: FilterState,
+): TransactionsView {
+  const account = accountTransactions(data, id);
+  const box = card.querySelector<HTMLElement>("[data-role='txn-filter']")!;
+  const index = categories ? indexCategories(categories) : null;
+  if (index && categories) warnUnknownCategories(data.spData?.transactions ?? [], categories, index);
+
+  const query = filter.query.trim();
+  const sel: Selection = !query && index && index.isValid(filter.category) ? filter.category : ALL;
+  let all = account;
+  if (query) {
+    // Every word must appear somewhere in the transaction.
+    const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+    all = account.filter((t) => {
+      const text = haystack(t, index, categories);
+      return terms.every((term) => text.includes(term));
+    });
+  } else if (index && sel !== ALL) {
+    all = account.filter((t) => index.matches(t, sel));
+  }
+
+  const options: BoxOption[] = [
+    { value: ALL, label: "All transactions", count: account.length },
+    ...(index ? filterOptions(account, index) : []),
+  ];
+  updateFilterBox(box, options, { category: sel, query });
+  const filterLabel = query ? `“${query}”` : index ? `“${index.labelOf(sel)}”` : "";
+
   const pages = Math.max(1, Math.ceil(all.length / PAGE_SIZE));
   const p = Math.min(Math.max(0, page), pages - 1);
   const start = data.spData?.startDate;
   const end = data.spData?.endDate;
 
-  const count = card.querySelector<HTMLElement>("[data-role='txn-count']")!;
-  count.textContent = String(all.length);
-  count.hidden = all.length === 0;
+  // Totals follow the filter.
+  const countEl = card.querySelector<HTMLElement>("[data-role='txn-count']")!;
+  countEl.textContent =
+    query || sel !== ALL ? `${count.format(all.length)} of ${count.format(account.length)}` : count.format(all.length);
+  countEl.hidden = account.length === 0;
   card.querySelector<HTMLElement>("[data-role='txn-range']")!.textContent =
-    start && end ? `${shortDate(start)} – ${shortDate(end)} (month to date)` : "Month to date";
+    start && end ? `${mediumDate(start)} – ${mediumDate(end)}` : "Last 12 months";
+  const totalsEl = card.querySelector<HTMLElement>("[data-role='txn-totals']")!;
+  let moneyIn = 0;
+  let moneyOut = 0;
+  for (const t of all) {
+    const amt = typeof t.amount === "number" ? Math.abs(t.amount) : 0;
+    if (t.isCredit) moneyIn += amt;
+    else moneyOut += amt;
+  }
+  totalsEl.innerHTML = `<span>In <strong class="is-credit">+${esc(moneyCents(moneyIn))}</strong></span><span>Out <strong>−${esc(moneyCents(moneyOut))}</strong></span>`;
+  totalsEl.hidden = all.length === 0;
 
   const body = card.querySelector<HTMLElement>("[data-role='txn-body']")!;
+  if (account.length === 0) {
+    body.innerHTML = `<p class="muted txn-empty">No transactions for this account${start ? ` since ${esc(mediumDate(start))}` : " in the last 12 months"}.</p>`;
+    return { page: 0, category: sel };
+  }
   if (all.length === 0) {
-    body.innerHTML = `<p class="muted txn-empty">No transactions for this account${start ? ` since ${esc(shortDate(start))}` : " this month"}.</p>`;
-    return 0;
+    const message = query
+      ? `No transactions for this account match ${filterLabel}.`
+      : `No ${filterLabel} transactions for this account${start ? ` since ${mediumDate(start)}` : ""}.`;
+    body.innerHTML = `<div class="txn-empty">
+        <p class="muted">${esc(message)}</p>
+        <button type="button" class="link-btn" data-action="clear-filter">Show all transactions</button>
+      </div>`;
+    return { page: 0, category: sel };
   }
 
   const from = p * PAGE_SIZE;
@@ -222,6 +432,21 @@ export function renderTransactions(card: HTMLElement, data: Transactions, id: nu
           <button type="button" class="pager__btn" data-page="${p + 1}" ${p === pages - 1 ? "disabled" : ""}><span>Next</span>${icons.chevronRight}</button>
         </nav>`
       : "";
-  body.innerHTML = `<ul class="txn-list">${shown.map(transactionRow).join("")}</ul>${pager}`;
-  return p;
+  // Group the page by month, since a year of transactions repeats month/day pairs.
+  const groups: { month: string; rows: Transaction[] }[] = [];
+  for (const t of shown) {
+    const key = (t.transactionDate ?? "").slice(0, 7);
+    const last = groups[groups.length - 1];
+    if (last && last.month === key) last.rows.push(t);
+    else groups.push({ month: key, rows: [t] });
+  }
+  body.innerHTML =
+    groups
+      .map(
+        (g) => `
+      <h3 class="txn-month">${esc(g.month ? monthYear(`${g.month}-01`) : "Undated")}</h3>
+      <ul class="txn-list">${g.rows.map((t) => transactionRow(t, index, txnKey(t, `${p}-${shown.indexOf(t)}`))).join("")}</ul>`,
+      )
+      .join("") + pager;
+  return { page: p, category: sel };
 }

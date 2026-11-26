@@ -1,4 +1,4 @@
-import type { ApiErrorBody, NetWorthHistory, Performance, Summary, Transactions } from "./types";
+import type { ApiErrorBody, CashFlowHistory, Categories, NetWorthHistory, Performance, Summary, Transactions } from "./types";
 import { getApiKey } from "./auth";
 
 /**
@@ -84,7 +84,17 @@ export function getNetWorthHistory(signal?: AbortSignal): Promise<Fetched<NetWor
   return getJson<NetWorthHistory>("/data/netWorthHistory", signal);
 }
 
-/** The saved `transactions` dataset: all accounts, month to date. No Empower call. */
+/** The saved `transactions` dataset: all accounts, last 12 months. No Empower call. */
 export function getTransactions(signal?: AbortSignal): Promise<Fetched<Transactions>> {
   return getJson<Transactions>("/data/transactions", signal);
+}
+
+/** The saved `cashFlowHistory` dataset: monthly money in/out per account, last year. No Empower call. */
+export function getCashFlowHistory(signal?: AbortSignal): Promise<Fetched<CashFlowHistory>> {
+  return getJson<CashFlowHistory>("/data/cashFlowHistory", signal);
+}
+
+/** The saved `categories` dataset: lookup table for transactions[].categoryId. No Empower call. */
+export function getCategories(signal?: AbortSignal): Promise<Fetched<Categories>> {
+  return getJson<Categories>("/data/categories", signal);
 }

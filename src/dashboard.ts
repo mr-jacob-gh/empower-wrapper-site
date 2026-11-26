@@ -116,9 +116,18 @@ export function findAccount(s: Summary, id: number): (Row & { info: GroupInfo })
   return row ? { ...row, info: groupInfo(row.account) } : null;
 }
 
-/** Investment-type accounts open their own screen. */
+/** Accounts under a tile (cash, investments, credit cards, loans) open their own screen. */
 export const opensDetail = (info: GroupInfo, account: Account): boolean =>
-  info.category === "investments" && typeof account.userAccountId === "number";
+  info.category !== null && typeof account.userAccountId === "number";
+
+/** Only investment-type accounts have performance trends and a balance chart. */
+export const hasTrends = (info: GroupInfo): boolean => info.category === "investments";
+
+/** Balance as the dashboard shows it: liabilities negative. */
+export function signedBalance(account: Account, info: GroupInfo): number {
+  const bal = typeof account.balance === "number" ? account.balance : 0;
+  return info.liability ? -Math.abs(bal) : bal;
+}
 
 /** "~3.9 months" of necessary expenses covered by the emergency fund. */
 function emergencyFundBadge(balance: number): string {
@@ -143,7 +152,7 @@ function accountRow({ account: a, isEmpower }: Row, info: GroupInfo): string {
   const fund = a.userAccountId === EMERGENCY_FUND.userAccountId ? emergencyFundBadge(bal) : "";
   // Investment-type rows get a slot that applyTrends() fills in.
   const detail = opensDetail(info, a);
-  const trend = detail ? `<div class="acct__trends" data-trend-id="${a.userAccountId}"></div>` : "";
+  const trend = detail && hasTrends(info) ? `<div class="acct__trends" data-trend-id="${a.userAccountId}"></div>` : "";
   const mods = [fund && "acct--fund", trend && "acct--trend", detail && "acct--link"].filter(Boolean).join(" ");
   const name = esc(a.name || a.originalName || "Account");
   // The whole row opens the account (main.ts); the link keeps it reachable by keyboard.

@@ -79,14 +79,15 @@ and it's dropped when you forget the API key.
 
 ## Account screen
 
-Selecting an investment, retirement, ESOP or ESPP account (anywhere on its row) opens its own
-screen at `#/account/<userAccountId>`, so the browser's back button and deep links work. On
+Selecting any account under the Cash, Investments, Credit cards or Loans tiles (anywhere on its
+row) opens its own screen at `#/account/<userAccountId>`, so the browser's back button and deep links work. On
 phones the dashboard slides off to the left as the account slides in from the right, and the
 reverse on **Back to summary**; on wider screens it's a short fade. Returning puts you back where
 you were on the dashboard.
 
-The screen shows the account's details and its 24h / 90d trends, a balance chart, and its
-transactions, 10 per page. Everything comes from saved files (no Empower calls), kept in memory
+The screen shows the account's details (credit cards also show the credit limit and available
+credit) and its transactions, 10 per page. Investment, retirement, ESOP and ESPP accounts also
+show their 24h / 90d trends and a balance chart; cash, credit card and loan accounts don't. Everything comes from saved files (no Empower calls), kept in memory
 for 5 minutes and never stored anywhere else:
 
 - **Balance chart:** `GET /data/netWorthHistory` (daily balance for every account, last year),
@@ -95,19 +96,39 @@ for 5 minutes and never stored anywhere else:
   (unlike the 24h/90d pills, which are market gain/loss). Hover or use the arrow keys for each
   day's value; **Show values** lists them all.
 - **Transactions:** `GET /data/transactions`, filtered to the account (duplicates dropped),
-  newest first. The saved file covers **month to date** only.
+  newest first and grouped by month. The saved file covers the **last 12 months**.
+- **Transaction details:** click (or Enter/Space on) a transaction to expand it and see every field
+  it has, labelled (the category is shown from the category list, with its group). Opening one
+  closes any other; clicking an open one closes it. Changing page or filter closes it too.
+- **Filter:** one box on the transactions card that is both a list and a search field.
+  - **Pick a grouping** from its list: **All transactions** (default), **Income**, **Expenses**,
+    **Transfers** or **Uncategorized**, each with its count for this account's loaded transactions
+    (zero counts are greyed but selectable). A transaction's group is the `type` of its category in
+    `GET /data/categories` (fetched once per page load), looked up by `categoryId`; the
+    transaction's own `categoryName` and `categoryType` are never used for this. Uncategorized also
+    catches transactions whose `categoryId` isn't in the list (each is logged to the console).
+  - **Or type** to search every text and number field of the transaction, plus the date and amount
+    as shown, and the category's name and group. Several words must all match. ID fields
+    (`userTransactionId`, `accountId`, …) are left out so numbers don't match by accident.
+  - Arrow keys, Enter and Escape work as in any combobox; Escape (or ×) clears the filter.
+  - The count badge and money in/out totals follow the filter, and it's kept in the URL
+    (`#/account/<id>?category=EXPENSE` or `?q=whole foods`). If the category list can't be loaded,
+    searching still works but the groupings aren't offered.
 
 ## Structure
 
 ```
 src/
-  api.ts        API client (X-API-Key; saved summary, performance, netWorthHistory, transactions)
+  api.ts        API client (X-API-Key; saved summary, performance, netWorthHistory, transactions,
+                categories, cashFlowHistory)
   auth.ts       Stores the API key in this browser only
   types.ts      Types for the API's summary and performance datasets
   dashboard.ts  Views: net worth, category tiles, account panels, trend pills, key prompt, errors
-  account.ts    Account screen: details, balance chart card, paginated transactions
+  account.ts    Account screen: details, paginated transactions, balance chart (investment-type only)
   chart.ts      Single-series SVG line chart with crosshair tooltip and keyboard stepping
   cache.ts      In-memory, per-tab cache for saved datasets
+  categories.ts Transaction category grouping (Income/Expenses/Transfers/Uncategorized) and filtering
+  filterbox.ts  The transactions filter box: grouping list + free-text search (ARIA combobox)
   trends.ts     24h / 90-day investment trends from the saved performance file, in-memory cache
   main.ts       App shell, key prompt flow, refresh + 5-minute polling, routing + screen transitions
   config.ts     Personal settings (emergency fund account and monthly expenses)

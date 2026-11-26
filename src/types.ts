@@ -111,7 +111,12 @@ export interface Transaction {
   isDuplicate?: boolean;
   description?: string;
   originalDescription?: string;
+  /** Joins to categories[].transactionCategoryId: use this (not categoryName/categoryType) to group and filter. */
+  categoryId?: number;
+  /** Display label only; can differ from the category's name. */
   categoryName?: string;
+  /** Usually the category's type, but not always (e.g. DEFERRED_COMPENSATION). Don't group by it. */
+  categoryType?: string;
   transactionType?: string;
   status?: string;
   /** Investment transactions. */
@@ -119,13 +124,51 @@ export interface Transaction {
   quantity?: number;
 }
 
-/** `GET /data/transactions`: all accounts (default: month to date). */
+/** `GET /data/transactions`: all accounts (default: last 1 year). */
 export interface Transactions {
   spData?: {
     startDate?: string;
     endDate?: string;
     transactions?: Transaction[];
   };
+}
+
+/** Money in/out for one account in one month. Amounts are positive, except `expense` can be negative (refunds). */
+export interface CashFlow {
+  cashIn?: number;
+  cashOut?: number;
+  income?: number;
+  expense?: number;
+}
+
+/** `GET /data/cashFlowHistory`: monthly cash flow for every account (default: last 1 year). */
+export interface CashFlowHistory {
+  spData?: {
+    intervalType?: string;
+    /** One row per month, dated the 1st; the last row is the current, partial month. */
+    histories?: {
+      date?: string;
+      aggregateCashIn?: number;
+      aggregateCashOut?: number;
+      aggregateIncome?: number;
+      aggregateExpense?: number;
+      /** Keyed by userAccountId as a string; only accounts with data that month. */
+      cashflows?: Record<string, CashFlow | undefined>;
+    }[];
+  };
+}
+
+export interface TransactionCategory {
+  transactionCategoryId?: number;
+  name?: string;
+  /** EXPENSE | INCOME | TRANSFER | UNCATEGORIZED */
+  type?: string;
+  transactionCategoryKey?: string;
+}
+
+/** `GET /data/categories`: lookup table for transactions[].categoryId. */
+export interface Categories {
+  spData?: TransactionCategory[];
 }
 
 export interface ApiErrorBody {

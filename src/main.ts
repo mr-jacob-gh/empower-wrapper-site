@@ -1,5 +1,5 @@
 import "./styles.css";
-import { API_BASE, ApiError, getNetWorthHistory, getSummary, getTransactions } from "./api";
+import { API_BASE, ApiError, getCategories, getNetWorthHistory, getSummary, getTransactions } from "./api";
 import { clearApiKey, getApiKey, setApiKey } from "./auth";
 import {
   applySelection,
@@ -7,6 +7,7 @@ import {
   dashboardHtml,
   errorHtml,
   findAccount,
+  hasTrends,
   keyFormHtml,
   loadingHtml,
   opensDetail,
@@ -22,6 +23,8 @@ import {
   type ChartRange,
 } from "./account";
 import { cached } from "./cache";
+import { ALL, type Selection } from "./categories";
+import { mountFilterBox, type FilterState } from "./filterbox";
 import { dateTime, esc, timeAgo } from "./format";
 import { icons } from "./icons";
 import { clearTrends, ensureTrends, trendState } from "./trends";
@@ -90,12 +93,15 @@ let inFlight: AbortController | null = null;
 // Saved datasets for the account screen, kept in this tab's memory only.
 const balanceHistory = cached(() => getNetWorthHistory(), POLL_MS);
 const transactions = cached(() => getTransactions(), POLL_MS);
+/** The category list changes rarely: fetched once per page load. */
+const categories = cached(() => getCategories(), Number.POSITIVE_INFINITY);
 
 function clearData(): void {
   summary = null;
   clearTrends();
   balanceHistory.clear();
   transactions.clear();
+  categories.clear();
 }
 
 function renderFreshness(): void {
@@ -196,18 +202,52 @@ function loadTrends(force: boolean): void {
 type ScreenName = "dashboard" | "account";
 let current: ScreenName = "dashboard";
 /** What the account screen shows; kept across re-renders of the same account. */
-let accountUi: { id: number; range: ChartRange; page: number } = { id: -1, range: "90d", page: 0 };
-/** Set when the account was opened from the dashboard, so Back can use history.back(). */
-let openedFromDashboard = false;
+let accountUi: {
+  id: number;
+  range: ChartRange;
+  page: number;
+  category: Selection;
+  query: string;
+  /** The expanded transaction row, if any (one at a time). */
+  openTxn: string | null;
+} = { id: -1, range: "90d", page: 0, category: ALL, query: "", openTxn: null };
 let dashboardScroll = 0;
 
+// Account URLs: #/account/<id>, optionally ?category=<INCOME|EXPENSE|TRANSFER|UNCATEGORIZED> or ?q=<search>.
+const ROUTE = /^#\/account\/(\d+)(?:\?(.*))?$/;
+
 function routeAccountId(): number | null {
-  const m = /^#\/account\/(\d+)$/.exec(location.hash);
+  const m = ROUTE.exec(location.hash);
   return m ? Number(m[1]) : null;
 }
 
+function routeFilter(): FilterState {
+  const params = new URLSearchParams(ROUTE.exec(location.hash)?.[2] ?? "");
+  const query = (params.get("q") ?? "").trim();
+  return { category: query ? ALL : params.get("category") || ALL, query };
+}
+
+/** Keep the transactions filter in the URL (replacing, not adding, a history entry). */
+function syncFilterToUrl(): void {
+  const id = routeAccountId();
+  if (id === null) return;
+  const params = new URLSearchParams();
+  if (accountUi.query) params.set("q", accountUi.query);
+  else if (accountUi.category !== ALL) params.set("category", accountUi.category);
+  const qs = params.toString();
+  const hash = `#/account/${id}${qs ? `?${qs}` : ""}`;
+  if (hash !== location.hash) {
+    history.replaceState(history.state, "", hash);
+    appliedHash = location.hash;
+  }
+}
+
+/** The URL fragment applyRoute() last acted on. */
+let appliedHash = location.hash;
+
 /** Show whatever the URL asks for. */
 function applyRoute(animate: boolean): void {
+  appliedHash = location.hash;
   const id = routeAccountId();
   if (id !== null) {
     if (!summary) return; // load() calls this again once the summary is in
@@ -226,23 +266,41 @@ function applyRoute(animate: boolean): void {
 function renderAccount(id: number, fresh: boolean): void {
   const found = summary ? findAccount(summary, id) : null;
   if (!found || !opensDetail(found.info, found.account)) {
-    accountUi = { id, range: "90d", page: 0 };
+    accountUi = { id, range: "90d", page: 0, category: ALL, query: "", openTxn: null };
     accountScreen.innerHTML = notFoundHtml();
     document.title = APP_TITLE;
     return;
   }
   document.title = `${found.account.name || found.account.originalName || "Account"} · ${APP_TITLE}`;
+  const withTrends = hasTrends(found.info);
+
+  // Keep the account's tile selected so Back lands on its list (also for deep links).
+  if (found.info.category && selected !== found.info.category) {
+    selected = found.info.category;
+    applySelection(content, selected);
+  }
 
   const hero = accountScreen.querySelector<HTMLElement>("[data-role='hero']");
+  // The URL holds the transactions filter (so it survives a reload and back/forward).
+  const filter = routeFilter();
+  if (accountUi.id === id && (accountUi.category !== filter.category || accountUi.query !== filter.query)) {
+    accountUi.category = filter.category;
+    accountUi.query = filter.query;
+    accountUi.page = 0;
+  }
   if (fresh || !hero || accountUi.id !== id) {
-    if (accountUi.id !== id) accountUi = { id, range: "90d", page: 0 };
+    if (accountUi.id !== id) accountUi = { id, range: "90d", page: 0, ...filter, openTxn: null };
     accountScreen.innerHTML = accountScreenHtml(found, accountUi.range);
+    const box = accountScreen.querySelector<HTMLElement>("[data-role='txn-filter']");
+    if (box) mountFilterBox(box, { category: accountUi.category, query: accountUi.query }, setFilter);
   } else {
     hero.outerHTML = heroHtml(found); // new balance/sync time after a poll
   }
-  renderTrends();
-  loadTrends(false);
-  void loadAccountData(id);
+  if (withTrends) {
+    renderTrends();
+    loadTrends(false);
+  }
+  void loadAccountData(id, withTrends);
 }
 
 const chartCard = () => accountScreen.querySelector<HTMLElement>(".chart-card");
@@ -257,10 +315,33 @@ function drawChart(): void {
 function drawTransactions(): void {
   const card = txnCard();
   const data = transactions.peek();
-  if (card && data) accountUi.page = renderTransactions(card, data.data, accountUi.id, accountUi.page);
+  if (!card || !data) return;
+  const cats = categories.peek()?.data.spData ?? null;
+  const view = renderTransactions(card, data.data, cats, accountUi.id, accountUi.page, {
+    category: accountUi.category,
+    query: accountUi.query,
+  });
+  accountUi.page = view.page;
+  showOpenTxn();
+  // Drop a grouping the filter doesn't offer (e.g. a stale link), once categories are in.
+  if (cats && view.category !== accountUi.category) {
+    accountUi.category = view.category;
+    syncFilterToUrl();
+  }
 }
 
-async function loadAccountData(id: number): Promise<void> {
+/** Transactions plus the category list. A failed category list just leaves the filter out. */
+async function loadTransactions(): Promise<void> {
+  await Promise.all([
+    transactions.get(),
+    categories.get().catch((err: unknown) => {
+      if (err instanceof ApiError && (err.kind === "unauthorized" || err.kind === "no-key")) throw err;
+      console.warn("Couldn't load transaction categories; showing transactions without the filter.", err);
+    }),
+  ]);
+}
+
+async function loadAccountData(id: number, withChart: boolean): Promise<void> {
   const still = () => accountUi.id === id && routeAccountId() === id;
   const fill = async (get: () => Promise<unknown>, draw: () => void, card: () => HTMLElement | null, body: string, what: string) => {
     try {
@@ -273,11 +354,11 @@ async function loadAccountData(id: number): Promise<void> {
     }
   };
   // Draw from memory straight away when we have it; the get() below refreshes if it's old.
-  drawChart();
+  if (withChart) drawChart();
   drawTransactions();
   await Promise.all([
-    fill(() => balanceHistory.get(), drawChart, chartCard, "chart-body", "balance history"),
-    fill(() => transactions.get(), drawTransactions, txnCard, "txn-body", "transactions"),
+    withChart ? fill(() => balanceHistory.get(), drawChart, chartCard, "chart-body", "balance history") : null,
+    fill(loadTransactions, drawTransactions, txnCard, "txn-body", "transactions"),
   ]);
 }
 
@@ -364,13 +445,16 @@ function focusAfter(target: ScreenName): void {
 /** Back to the dashboard without animation (errors, key prompt). */
 function leaveAccountNow(): void {
   if (routeAccountId() !== null) history.replaceState(null, "", location.pathname + location.search);
-  openedFromDashboard = false;
   if (current !== "dashboard") void show("dashboard", false);
 }
 
+/** History entries for accounts opened from the dashboard carry this, so Back can use history.back(). */
+const FROM_DASHBOARD = { fromDashboard: true };
+const openedFromDashboard = (): boolean =>
+  (history.state as { fromDashboard?: boolean } | null)?.fromDashboard === true;
+
 function goBack(): void {
-  if (openedFromDashboard) {
-    openedFromDashboard = false;
+  if (openedFromDashboard()) {
     history.back(); // fires hashchange → applyRoute(true)
   } else {
     history.replaceState(null, "", location.pathname + location.search);
@@ -379,14 +463,16 @@ function goBack(): void {
 }
 
 function openAccount(id: number): void {
-  openedFromDashboard = true;
-  location.hash = `#/account/${id}`; // fires hashchange → applyRoute(true)
+  history.pushState(FROM_DASHBOARD, "", `#/account/${id}`);
+  applyRoute(true); // pushState doesn't fire hashchange
 }
 
-window.addEventListener("hashchange", () => {
-  if (routeAccountId() === null) openedFromDashboard = false;
-  applyRoute(true);
-});
+// Browsers fire both popstate and hashchange for one navigation; act once per URL change.
+const onNavigate = () => {
+  if (location.hash !== appliedHash) applyRoute(true);
+};
+window.addEventListener("popstate", onNavigate);
+window.addEventListener("hashchange", onNavigate);
 
 // ---------- Errors ----------
 
@@ -427,7 +513,7 @@ root.addEventListener("click", (e) => {
   if (el.closest("[data-action='reload']")) {
     e.preventDefault();
     void load(false);
-    if (selected === "investments" || current === "account") loadTrends(true);
+    if (selected === "investments") loadTrends(true);
     if (current === "account") {
       balanceHistory.clear();
       transactions.clear();
@@ -448,9 +534,33 @@ root.addEventListener("click", (e) => {
     drawChart();
     return;
   }
+  // Transactions: open a row's details, closing any other; click an open row to close it.
+  const txnToggle = el.closest<HTMLElement>("[data-txn-toggle]");
+  if (txnToggle) {
+    const key = txnToggle.dataset.txnToggle ?? null;
+    const row = txnToggle.closest<HTMLElement>(".txn");
+    const before = row?.getBoundingClientRect().top ?? 0;
+    accountUi.openTxn = accountUi.openTxn === key ? null : key;
+    showOpenTxn();
+    // Closing a taller row above would shift this one up: keep it where it was clicked.
+    if (row) {
+      window.scrollBy(0, row.getBoundingClientRect().top - before);
+      if (accountUi.openTxn === key) {
+        const r = row.getBoundingClientRect();
+        if (r.bottom > window.innerHeight) row.scrollIntoView({ block: "nearest", behavior: reducedMotion() ? "auto" : "smooth" });
+      }
+    }
+    return;
+  }
+
+  if (el.closest("[data-action='clear-filter']")) {
+    setFilter({ category: ALL, query: "" });
+    return;
+  }
   const pageBtn = el.closest<HTMLButtonElement>("[data-page]");
   if (pageBtn && !pageBtn.disabled) {
     accountUi.page = Number(pageBtn.dataset.page);
+    accountUi.openTxn = null;
     drawTransactions();
     const card = txnCard();
     if (card && card.getBoundingClientRect().top < 0) card.scrollIntoView({ block: "start", behavior: reducedMotion() ? "auto" : "smooth" });
@@ -475,6 +585,28 @@ root.addEventListener("click", (e) => {
   }
 });
 
+/** Reflect accountUi.openTxn in the transaction rows. */
+function showOpenTxn(): void {
+  const card = txnCard();
+  if (!card) return;
+  for (const row of card.querySelectorAll<HTMLElement>(".txn[data-txn-key]")) {
+    const open = row.dataset.txnKey === accountUi.openTxn;
+    row.classList.toggle("is-open", open);
+    row.querySelector(".txn__row")?.setAttribute("aria-expanded", String(open));
+    const details = row.querySelector<HTMLElement>(".txn__details");
+    if (details) details.hidden = !open;
+  }
+}
+
+function setFilter(filter: FilterState): void {
+  accountUi.category = filter.query ? ALL : filter.category;
+  accountUi.query = filter.query;
+  accountUi.page = 0;
+  accountUi.openTxn = null;
+  syncFilterToUrl();
+  drawTransactions();
+}
+
 root.addEventListener("submit", (e) => {
   const form = (e.target as Element).closest<HTMLFormElement>("[data-form='api-key']");
   if (!form) return;
@@ -498,8 +630,4 @@ document.addEventListener("visibilitychange", () => {
 });
 
 // A deep link to an account (#/account/<id>) opens it once the summary loads.
-if (routeAccountId() !== null) {
-  // Select the Investments tile so Back lands on the account list.
-  selected = "investments";
-}
 void load(true);

@@ -47,6 +47,20 @@ export const signedMoney = (n: number): string => minus(usd0Signed.format(n));
 /** 0.0042 -> "+0.42%" */
 export const signedPercent = (fraction: number): string => minus(pctSigned.format(fraction));
 
+/** "2025-11-25" -> "Nov 25, 2025" */
+export function mediumDate(ymd: string): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  if (!y || !m || !d) return ymd;
+  return new Date(y, m - 1, d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+/** "2026-11-04" -> "November 2026" */
+export function monthYear(ymd: string): string {
+  const [y, m] = ymd.split("-").map(Number);
+  if (!y || !m) return ymd;
+  return new Date(y, m - 1, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
+}
+
 /** "2026-10-25" -> "Oct 25" */
 export function shortDate(ymd: string): string {
   const [y, m, d] = ymd.split("-").map(Number);

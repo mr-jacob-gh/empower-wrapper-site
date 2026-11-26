@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Empower Local Service API
-  version: 1.2.0
+  version: 1.3.0
   description: |
     Read-only access to one person's Empower (Personal Dashboard) financial data, collected by a
     Windows service running on their own PC.
@@ -36,9 +36,9 @@ info:
       Check freshness with `GET /data` (`savedAt`) or the `Last-Modified` header.
 
     ## Calls that do reach Empower (use sparingly)
-    - `GET /data/{name}?startDate=&endDate=`: live fetch of a custom date range for the four
+    - `GET /data/{name}?startDate=&endDate=`: live fetch of a custom date range for the five
       date-based datasets. Returns the result without saving it. Takes about 1-5 s.
-    - `POST /refresh`: re-fetches and saves all 12 datasets, one after another. It can take up to
+    - `POST /refresh`: re-fetches and saves all 13 datasets, one after another. It can take up to
       a minute. Only use it when the data must be newer than the last 15-minute run.
     - `POST /jobs/{name}/run`: the same, for one dataset.
 
@@ -126,7 +126,7 @@ paths:
       tags: [data]
       summary: All saved datasets in one object
       description: |
-        `{ "<datasetName>": <saved JSON or null> }` for all 12 datasets. Reads files only.
+        `{ "<datasetName>": <saved JSON or null> }` for all 13 datasets. Reads files only.
         The response is large (the full year of `netWorthHistory` alone is ~270 KB); prefer
         `/data/{name}` when you only need some of it.
       operationId: getAllDatasets
@@ -144,7 +144,7 @@ paths:
       summary: One dataset (saved file, or live for a custom date range)
       description: |
         - **No dates:** returns the saved file (`X-Data-Source: file`). No Empower call.
-        - **`startDate` and/or `endDate`** (only `netWorthHistory`, `transactions`, `investments`,
+        - **`startDate` and/or `endDate`** (only `netWorthHistory`, `cashFlowHistory`, `transactions`, `investments`,
           `performance`): fetches that range from Empower live (`X-Data-Source: live`) and returns
           it **without** changing the saved file. A missing bound uses the dataset's default
           (see `GET /data`).
@@ -222,7 +222,7 @@ paths:
       tags: [control]
       summary: Re-fetch and save every dataset now
       description: |
-        Calls Empower for all 12 datasets, one after another, with their default date ranges, and
+        Calls Empower for all 13 datasets, one after another, with their default date ranges, and
         saves each one that succeeds. It can take up to a minute. The result lists each job's
         outcome; a failure in one doesn't stop the others.
       operationId: refreshAll
@@ -241,7 +241,7 @@ paths:
       tags: [control]
       summary: Health of every job, including the session heartbeat
       description: |
-        Jobs are the 12 datasets plus `querySession`, the session heartbeat that runs every 60 s.
+        Jobs are the 13 datasets plus `querySession`, the session heartbeat that runs every 60 s.
         If `querySession.lastRunOk` is false, the Empower session has ended and the user must log in
         again.
       operationId: getStatus
@@ -309,7 +309,7 @@ components:
     # ---------- Service ----------
     DatasetName:
       type: string
-      enum: [summary, accounts, netWorthHistory, transactions, investments, performance,
+      enum: [summary, accounts, netWorthHistory, cashFlowHistory, transactions, investments, performance,
              spending, retirementCashFlow, emergencySavings, debtPayment, categories, tags]
       description: |
         | name | Contents | Default date range |
@@ -317,7 +317,8 @@ components:
         | summary | Net worth totals and an overview of each account | - |
         | accounts | Full detail for every account, with totals by category | - |
         | netWorthHistory | Daily net worth and per-account balances | last 1 year |
-        | transactions | Transactions for all accounts, with cash-flow totals | month to date |
+        | cashFlowHistory | Monthly cash flow (money in and out) for every account | last 1 year |
+        | transactions | Transactions for all accounts, with cash-flow totals | last 1 year |
         | investments | Portfolio, quotes and daily history vs. benchmarks | last 90 days |
         | performance | Investment-account performance vs. benchmarks | last 90 days |
         | spending | Spending vs. target by week, month and year | - |
@@ -395,6 +396,7 @@ components:
         summary: { oneOf: [{ $ref: "#/components/schemas/Summary" }, { type: "null" }] }
         accounts: { oneOf: [{ $ref: "#/components/schemas/Accounts" }, { type: "null" }] }
         netWorthHistory: { oneOf: [{ $ref: "#/components/schemas/NetWorthHistory" }, { type: "null" }] }
+        cashFlowHistory: { oneOf: [{ $ref: "#/components/schemas/CashFlowHistory" }, { type: "null" }] }
         transactions: { oneOf: [{ $ref: "#/components/schemas/Transactions" }, { type: "null" }] }
         investments: { oneOf: [{ $ref: "#/components/schemas/Investments" }, { type: "null" }] }
         performance: { oneOf: [{ $ref: "#/components/schemas/Performance" }, { type: "null" }] }
@@ -411,6 +413,7 @@ components:
         - $ref: "#/components/schemas/Summary"
         - $ref: "#/components/schemas/Accounts"
         - $ref: "#/components/schemas/NetWorthHistory"
+        - $ref: "#/components/schemas/CashFlowHistory"
         - $ref: "#/components/schemas/Transactions"
         - $ref: "#/components/schemas/Investments"
         - $ref: "#/components/schemas/Performance"
@@ -588,9 +591,45 @@ components:
                     additionalProperties: { type: [number, string] }
             accountSummaries: { type: array, items: { $ref: "#/components/schemas/AccountSummary" } }
 
+    CashFlowHistory:
+      type: object
+      description: |
+        `cashFlowHistory`: monthly cash flow for every account over the date range (default: last
+        1 year), from Empower's `account/getHistories` with `types=["cashflows"]`, `intervalType=MONTH`.
+        One row per month, dated the 1st of the month. The last row is the current, partial month.
+        A month appears only if it starts inside the range, so a range beginning mid-month starts at
+        the next month. All amounts are positive numbers (money out is positive too), except
+        `expense`, which can be negative when refunds exceed spending.
+      properties:
+        spHeader: { $ref: "#/components/schemas/SpHeader" }
+        spData:
+          type: object
+          properties:
+            intervalType: { type: string, example: MONTH }
+            histories:
+              type: array
+              items:
+                type: object
+                properties:
+                  date: { type: string, format: date, description: "First day of the month." }
+                  aggregateCashIn: { type: number, description: "Money into all accounts that month (sum of cashflows[].cashIn)." }
+                  aggregateCashOut: { type: number, description: "Money out of all accounts (sum of cashflows[].cashOut); positive." }
+                  aggregateIncome: { type: number, description: "Income across all accounts (sum of cashflows[].income)." }
+                  aggregateExpense: { type: number, description: "Spending across all accounts (sum of cashflows[].expense)." }
+                  cashflows:
+                    type: object
+                    description: 'Per-account figures, keyed by userAccountId as a string (e.g. `"1527851086"`). Only accounts with data that month are present.'
+                    additionalProperties:
+                      type: object
+                      properties:
+                        cashIn: { type: number }
+                        cashOut: { type: number }
+                        income: { type: number }
+                        expense: { type: number }
+
     Transactions:
       type: object
-      description: "`transactions`: all accounts over the date range (default: month to date)."
+      description: "`transactions`: all accounts over the date range (default: last 1 year)."
       properties:
         spHeader: { $ref: "#/components/schemas/SpHeader" }
         spData:
