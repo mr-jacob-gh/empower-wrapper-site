@@ -270,7 +270,7 @@ function detailsHtml(t: Transaction, index: CategoryIndex | null): string {
 export const txnKey = (t: Transaction, fallback: string): string =>
   typeof t.userTransactionId === "number" ? String(t.userTransactionId) : fallback;
 
-function transactionRow(t: Transaction, index: CategoryIndex | null, key: string): string {
+function transactionRow(t: Transaction, index: CategoryIndex | null, key: string, account?: string): string {
   const [, m, d] = (t.transactionDate ?? "").split("-").map(Number);
   const mon = m ? new Date(2000, m - 1, 1).toLocaleDateString("en-US", { month: "short" }) : "";
   const amount = typeof t.amount === "number" ? Math.abs(t.amount) : null;
@@ -279,7 +279,7 @@ function transactionRow(t: Transaction, index: CategoryIndex | null, key: string
     typeof t.quantity === "number" && t.quantity !== 0 && typeof t.price === "number"
       ? `${qty.format(Math.abs(t.quantity))} sh @ ${moneyCents(t.price)}`
       : "";
-  const sub = [t.categoryName || t.transactionType, trade].filter(Boolean).map(esc).join(" · ");
+  const sub = [t.categoryName || t.transactionType, trade, account].filter(Boolean).map((x) => esc(x!)).join(" · ");
   const pending = t.status?.toLowerCase() === "pending" ? ` <span class="tag tag--warn">Pending</span>` : "";
   const panel = `txn-details-${esc(key)}`;
   // Click the row to show every field; only one row is open at a time (main.ts).
@@ -423,6 +423,22 @@ export function renderTransactions(
     return { page: 0, category: sel };
   }
 
+  body.innerHTML = pagedTransactionsHtml(all, index, p);
+  return { page: p, category: sel };
+}
+
+/**
+ * One page (PAGE_SIZE) of `all`, grouped by month, with a pager when there's more than
+ * one page. Rows expand to show every field (main.ts). `page` must already be clamped.
+ * `accountOf` adds the account to each row (for lists that mix accounts).
+ */
+export function pagedTransactionsHtml(
+  all: Transaction[],
+  index: CategoryIndex | null,
+  p: number,
+  accountOf?: (t: Transaction) => string | undefined,
+): string {
+  const pages = Math.max(1, Math.ceil(all.length / PAGE_SIZE));
   const from = p * PAGE_SIZE;
   const shown = all.slice(from, from + PAGE_SIZE);
   const pager =
@@ -441,13 +457,13 @@ export function renderTransactions(
     if (last && last.month === key) last.rows.push(t);
     else groups.push({ month: key, rows: [t] });
   }
-  body.innerHTML =
+  return (
     groups
       .map(
         (g) => `
       <h3 class="txn-month">${esc(g.month ? monthYear(`${g.month}-01`) : "Undated")}</h3>
-      <ul class="txn-list">${g.rows.map((t) => transactionRow(t, index, txnKey(t, `${p}-${shown.indexOf(t)}`))).join("")}</ul>`,
+      <ul class="txn-list">${g.rows.map((t) => transactionRow(t, index, txnKey(t, `${p}-${shown.indexOf(t)}`), accountOf?.(t))).join("")}</ul>`,
       )
-      .join("") + pager;
-  return { page: p, category: sel };
+      .join("") + pager
+  );
 }

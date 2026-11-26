@@ -18,18 +18,31 @@ import {
   errorBlock,
   heroHtml,
   notFoundHtml,
+  PAGE_SIZE,
+  pagedTransactionsHtml,
   renderChart,
   renderTransactions,
   type ChartRange,
 } from "./account";
 import { cached } from "./cache";
 import { detectSubscriptions, isSubSort, renderSubscriptions, subscriptionsShellHtml, type SubSort } from "./subscriptions";
+import {
+  isRangeKey,
+  isSliceKey,
+  renderSpendingChart,
+  spendingBreakdown,
+  spendingListHeadHtml,
+  spendingShellHtml,
+  type RangeKey,
+  type SliceKey,
+} from "./spending";
+import { indexCategories } from "./categories";
 import { ALL, type Selection } from "./categories";
 import { mountFilterBox, type FilterState } from "./filterbox";
 import { dateTime, esc, timeAgo } from "./format";
 import { icons } from "./icons";
 import { clearTrends, ensureTrends, trendState } from "./trends";
-import type { Summary } from "./types";
+import type { Summary, Transaction } from "./types";
 
 /** The service saves every 15 minutes; flag data older than this as stale. */
 const STALE_AFTER_MS = 30 * 60 * 1000;
@@ -45,6 +58,7 @@ root.innerHTML = `
       <div class="brand"><span class="brand__mark">${icons.logo}</span><span>Empower</span></div>
       <nav class="nav" aria-label="Main">
         <a class="nav__item is-active" href="#" data-nav="dashboard" aria-current="page">${icons.dashboard}<span>Dashboard</span></a>
+        <a class="nav__item" href="#/spending" data-nav="spending">${icons.pie}<span>Spending</span></a>
         <a class="nav__item" href="#/subscriptions" data-nav="subscriptions">${icons.repeat}<span>Subscriptions</span></a>
       </nav>
       <div class="sidebar__foot">
@@ -58,6 +72,7 @@ root.innerHTML = `
       <div class="brand"><span class="brand__mark">${icons.logo}</span><span>Empower</span></div>
       <nav class="topnav" aria-label="Main">
         <a class="topnav__item is-active" href="#" data-nav="dashboard" aria-current="page">Dashboard</a>
+        <a class="topnav__item" href="#/spending" data-nav="spending">Spending</a>
         <a class="topnav__item" href="#/subscriptions" data-nav="subscriptions">Subscriptions</a>
       </nav>
       <div class="topbar__actions">
@@ -80,6 +95,7 @@ root.innerHTML = `
         </div>
         <div class="screen" data-screen="account" id="account" hidden></div>
         <div class="screen" data-screen="subscriptions" id="subscriptions" hidden></div>
+        <div class="screen" data-screen="spending" id="spending" hidden></div>
       </div>
     </main>
   </div>
@@ -89,6 +105,7 @@ const stage = root.querySelector<HTMLDivElement>(".stage")!;
 const dashboardScreen = root.querySelector<HTMLDivElement>("[data-screen='dashboard']")!;
 const accountScreen = root.querySelector<HTMLDivElement>("#account")!;
 const subsScreen = root.querySelector<HTMLDivElement>("#subscriptions")!;
+const spendScreen = root.querySelector<HTMLDivElement>("#spending")!;
 const content = root.querySelector<HTMLDivElement>("#content")!;
 const freshness = root.querySelector<HTMLDivElement>("#freshness")!;
 
@@ -207,7 +224,7 @@ function loadTrends(force: boolean): void {
 
 // ---------- Account screen ----------
 
-type ScreenName = "dashboard" | "account" | "subscriptions";
+type ScreenName = "dashboard" | "account" | "subscriptions" | "spending";
 let current: ScreenName = "dashboard";
 /** What the account screen shows; kept across re-renders of the same account. */
 let accountUi: {
@@ -263,8 +280,28 @@ function routeSubSort(): SubSort {
 }
 
 /** Highlight the nav item for the current page (accounts belong to the dashboard). */
+// Spending URL: #/spending, optionally ?range=<week|month|year|ytd>&slice=<restaurants|...>.
+const SPEND_ROUTE = /^#\/spending\/?(?:\?(.*))?$/;
+const isSpendingRoute = (): boolean => SPEND_ROUTE.test(location.hash);
+
+function routeSpending(): { range: RangeKey; slice: SliceKey | null } {
+  const params = new URLSearchParams(SPEND_ROUTE.exec(location.hash)?.[1] ?? "");
+  const range = params.get("range");
+  const slice = params.get("slice");
+  return { range: isRangeKey(range) ? range : "month", slice: isSliceKey(slice) ? slice : null };
+}
+
+function setSpendingUrl(range: RangeKey, slice: SliceKey | null): void {
+  const params = new URLSearchParams();
+  if (range !== "month") params.set("range", range);
+  if (slice) params.set("slice", slice);
+  const qs = params.toString();
+  history.replaceState(history.state, "", `#/spending${qs ? `?${qs}` : ""}`);
+  appliedHash = location.hash;
+}
+
 function updateNav(): void {
-  const page = isSubscriptionsRoute() ? "subscriptions" : "dashboard";
+  const page = isSubscriptionsRoute() ? "subscriptions" : isSpendingRoute() ? "spending" : "dashboard";
   for (const a of root.querySelectorAll<HTMLElement>("[data-nav]")) {
     const on = a.dataset.nav === page;
     a.classList.toggle("is-active", on);
@@ -280,6 +317,11 @@ function applyRoute(animate: boolean): void {
   if (isSubscriptionsRoute()) {
     renderSubscriptionsScreen();
     if (current !== "subscriptions") void show("subscriptions", animate);
+    return;
+  }
+  if (isSpendingRoute()) {
+    renderSpendingScreen();
+    if (current !== "spending") void show("spending", animate);
     return;
   }
   const id = routeAccountId();
@@ -403,7 +445,7 @@ const running: Animation[] = [];
 const isMobile = () => matchMedia("(max-width: 760px)").matches;
 const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 const screenEl = (name: ScreenName) =>
-  name === "dashboard" ? dashboardScreen : name === "account" ? accountScreen : subsScreen;
+  ({ dashboard: dashboardScreen, account: accountScreen, subscriptions: subsScreen, spending: spendScreen })[name];
 /** Opening an account and going back slide on phones; switching pages fades. */
 const isDrillDown = (a: ScreenName, b: ScreenName): boolean =>
   (a === "dashboard" && b === "account") || (a === "account" && b === "dashboard");
@@ -473,8 +515,8 @@ async function show(target: ScreenName, animate: boolean): Promise<void> {
 
 /** Move focus for keyboard and screen-reader users after a screen change. */
 function focusAfter(target: ScreenName): void {
-  if (target === "subscriptions") {
-    subsScreen.querySelector<HTMLElement>("h1")?.focus({ preventScroll: true });
+  if (target === "subscriptions" || target === "spending") {
+    screenEl(target).querySelector<HTMLElement>("h1")?.focus({ preventScroll: true });
   } else if (target === "account") {
     accountScreen.querySelector<HTMLElement>("[data-action='back']")?.focus({ preventScroll: true });
   } else {
@@ -529,6 +571,65 @@ async function loadSubscriptions(): Promise<void> {
     if (handleKeyError(err) || !isSubscriptionsRoute()) return;
     const body = subsScreen.querySelector<HTMLElement>("[data-role='subs-body']");
     if (body) body.innerHTML = `<section class="card">${errorBlock(`Couldn't load transactions: ${err instanceof Error ? err.message : String(err)}`)}</section>`;
+  }
+}
+
+// ---------- Spending screen ----------
+
+/** The list under the chart: its page and expanded row, reset when the period or slice changes. */
+let spendingUi: { view: string; page: number; openTxn: string | null } = { view: "", page: 0, openTxn: null };
+const spendList = () => spendScreen.querySelector<HTMLElement>("[data-role='spend-list']");
+
+function renderSpendingScreen(): void {
+  document.title = `Spending · ${APP_TITLE}`;
+  if (!spendScreen.querySelector(".spend-screen")) spendScreen.innerHTML = spendingShellHtml();
+  void loadSpending();
+}
+
+function todayYmd(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function drawSpending(): void {
+  const data = transactions.peek()?.data;
+  if (!data || !isSpendingRoute()) return;
+  const { range, slice } = routeSpending();
+  const view = `${range}|${slice ?? ""}`;
+  if (spendingUi.view !== view) spendingUi = { view, page: 0, openTxn: null };
+
+  const cats = categories.peek()?.data.spData ?? null;
+  const b = spendingBreakdown(data.spData?.transactions ?? [], cats, range, data.spData?.endDate ?? todayYmd(), data.spData?.startDate);
+  renderSpendingChart(spendScreen, b, range, slice);
+
+  const list = spendList();
+  if (!list) return;
+  const sel = b.slices.find((s) => s.key === slice);
+  if (!sel) {
+    list.innerHTML = spendingListHeadHtml(b, null);
+    return;
+  }
+  const pages = Math.max(1, Math.ceil(sel.transactions.length / PAGE_SIZE));
+  spendingUi.page = Math.min(Math.max(0, spendingUi.page), pages - 1);
+  const accountOf = (t: Transaction) =>
+    (summary && typeof t.userAccountId === "number" ? findAccount(summary, t.userAccountId)?.account.name : undefined) ?? t.accountName;
+  list.innerHTML =
+    spendingListHeadHtml(b, slice) +
+    (sel.transactions.length
+      ? pagedTransactionsHtml(sel.transactions, cats ? indexCategories(cats) : null, spendingUi.page, accountOf)
+      : `<p class="muted txn-empty">No ${sel.label.toLowerCase()} transactions in this period.</p>`);
+  showOpenTxn(list, spendingUi.openTxn);
+}
+
+async function loadSpending(): Promise<void> {
+  if (transactions.peek() && categories.peek()) drawSpending();
+  try {
+    await loadTransactions();
+    drawSpending();
+  } catch (err) {
+    if (handleKeyError(err) || !isSpendingRoute()) return;
+    const host = spendScreen.querySelector<HTMLElement>("[data-role='spend-chart']");
+    if (host) host.innerHTML = errorBlock(`Couldn't load transactions: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -608,7 +709,7 @@ root.addEventListener("click", (e) => {
     e.preventDefault();
     void load(false);
     if (selected === "investments") loadTrends(true);
-    if (current === "account" || current === "subscriptions") {
+    if (current === "account" || current === "subscriptions" || current === "spending") {
       balanceHistory.clear();
       transactions.clear();
     }
@@ -628,6 +729,32 @@ root.addEventListener("click", (e) => {
     drawChart();
     return;
   }
+  // Spending: period switch and slice selection (kept in the URL, replacing the history entry).
+  const rangeSwitch = el.closest<HTMLElement>("[data-spend-range]");
+  if (rangeSwitch) {
+    const range = rangeSwitch.dataset.spendRange ?? "month";
+    if (isRangeKey(range)) setSpendingUrl(range, routeSpending().slice);
+    drawSpending();
+    spendScreen.querySelector<HTMLElement>(`[data-spend-range='${range}']`)?.focus({ preventScroll: true });
+    return;
+  }
+  const sliceBtn = el.closest<HTMLElement | SVGElement>("[data-spend-slice]");
+  if (sliceBtn) {
+    const key = sliceBtn.dataset.spendSlice ?? null;
+    const { range, slice } = routeSpending();
+    const next = isSliceKey(key) && key !== slice ? key : null;
+    setSpendingUrl(range, next);
+    drawSpending();
+    const legendBtn = spendScreen.querySelector<HTMLElement>(`.spend-key[data-spend-slice='${key}']`);
+    if (sliceBtn.closest(".spend-legend, .spend-donut")) legendBtn?.focus({ preventScroll: true });
+    // Bring the transactions into view when a slice is picked.
+    const list = spendList();
+    if (next && list && list.getBoundingClientRect().top > window.innerHeight - 120) {
+      list.scrollIntoView({ block: "start", behavior: reducedMotion() ? "auto" : "smooth" });
+    }
+    return;
+  }
+
   // Subscriptions: sort order (kept in the URL, replacing the history entry).
   const sortBtn = el.closest<HTMLElement>("[data-sub-sort]");
   if (sortBtn) {
@@ -662,12 +789,15 @@ root.addEventListener("click", (e) => {
     const key = txnToggle.dataset.txnToggle ?? null;
     const row = txnToggle.closest<HTMLElement>(".txn");
     const before = row?.getBoundingClientRect().top ?? 0;
-    accountUi.openTxn = accountUi.openTxn === key ? null : key;
-    showOpenTxn();
+    // The account screen and the Spending list each keep their own open row.
+    const ui = txnToggle.closest("#spending") ? spendingUi : accountUi;
+    ui.openTxn = ui.openTxn === key ? null : key;
+    if (ui === spendingUi) showOpenTxn(spendList(), ui.openTxn);
+    else showOpenTxn();
     // Closing a taller row above would shift this one up: keep it where it was clicked.
     if (row) {
       window.scrollBy(0, row.getBoundingClientRect().top - before);
-      if (accountUi.openTxn === key) {
+      if (ui.openTxn === key) {
         const r = row.getBoundingClientRect();
         if (r.bottom > window.innerHeight) row.scrollIntoView({ block: "nearest", behavior: reducedMotion() ? "auto" : "smooth" });
       }
@@ -680,6 +810,14 @@ root.addEventListener("click", (e) => {
     return;
   }
   const pageBtn = el.closest<HTMLButtonElement>("[data-page]");
+  if (pageBtn && !pageBtn.disabled && pageBtn.closest("#spending")) {
+    spendingUi.page = Number(pageBtn.dataset.page);
+    spendingUi.openTxn = null;
+    drawSpending();
+    const list = spendList();
+    if (list && list.getBoundingClientRect().top < 0) list.scrollIntoView({ block: "start", behavior: reducedMotion() ? "auto" : "smooth" });
+    return;
+  }
   if (pageBtn && !pageBtn.disabled) {
     accountUi.page = Number(pageBtn.dataset.page);
     accountUi.openTxn = null;
@@ -708,11 +846,11 @@ root.addEventListener("click", (e) => {
 });
 
 /** Reflect accountUi.openTxn in the transaction rows. */
-function showOpenTxn(): void {
-  const card = txnCard();
+/** Reflect the open row in a transaction list (the account screen's by default). */
+function showOpenTxn(card: HTMLElement | null = txnCard(), openKey: string | null = accountUi.openTxn): void {
   if (!card) return;
   for (const row of card.querySelectorAll<HTMLElement>(".txn[data-txn-key]")) {
-    const open = row.dataset.txnKey === accountUi.openTxn;
+    const open = row.dataset.txnKey === openKey;
     row.classList.toggle("is-open", open);
     row.querySelector(".txn__row")?.setAttribute("aria-expanded", String(open));
     const details = row.querySelector<HTMLElement>(".txn__details");
@@ -755,4 +893,4 @@ document.addEventListener("visibilitychange", () => {
 // Subscriptions page doesn't need the summary, so it opens straight away.
 updateNav();
 void load(true);
-if (isSubscriptionsRoute() && getApiKey()) applyRoute(false);
+if ((isSubscriptionsRoute() || isSpendingRoute()) && getApiKey()) applyRoute(false);

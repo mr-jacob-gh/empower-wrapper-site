@@ -64,8 +64,10 @@ export interface Subscription {
   category: string;
   /** Set when the price changed: the amount before the latest change, and when it changed. */
   priceChange: { from: number; on: string } | null;
-  /** How many active subscriptions share this merchant (2+ means separate plans, told apart by price). */
+  /** How many listed subscriptions share this merchant (2+ means separate plans, told apart by price). */
   sameMerchant: number;
+  /** False for one that has stopped (only returned with includeEnded). */
+  active: boolean;
 }
 
 const amountOf = (t: Transaction): number => (typeof t.amount === "number" ? Math.abs(t.amount) : 0);
@@ -153,9 +155,11 @@ export interface DetectOptions {
   categories: TransactionCategory[] | null;
   /** Account name for a userAccountId (falls back to the transaction's accountName). */
   accountName?: (userAccountId: number | undefined) => string | undefined;
+  /** Also return subscriptions that have ended (active: false), e.g. to total past spending. */
+  includeEnded?: boolean;
 }
 
-/** Active subscriptions, most expensive (per month) first. */
+/** Active subscriptions (plus ended ones with includeEnded), most expensive (per month) first. */
 export function detectSubscriptions(transactions: Transaction[], opts: DetectOptions): Subscription[] {
   const index: CategoryIndex | null = opts.categories ? indexCategories(opts.categories) : null;
 
@@ -191,7 +195,8 @@ export function detectSubscriptions(transactions: Transaction[], opts: DetectOpt
     if (!c) return false;
     const last = charges[charges.length - 1]!;
     const lastDay = dayNumber(last.transactionDate!);
-    if (asOfDay - lastDay > c.days + Math.max(7, c.days * 0.5)) return true; // a real subscription, but it has ended
+    const active = asOfDay - lastDay <= c.days + Math.max(7, c.days * 0.5);
+    if (!active && !opts.includeEnded) return true; // a real subscription, but it has ended
     let priceChange: Subscription["priceChange"] = null;
     for (let i = charges.length - 1; i > 0; i--) {
       const a = amountOf(charges[i]!);
@@ -216,6 +221,7 @@ export function detectSubscriptions(transactions: Transaction[], opts: DetectOpt
       category: cat?.name ?? last.categoryName ?? "",
       priceChange,
       sameMerchant: 1,
+      active,
     });
     return true;
   };

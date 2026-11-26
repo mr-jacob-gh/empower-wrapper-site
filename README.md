@@ -122,6 +122,28 @@ for 5 minutes and never stored anywhere else:
     (`#/account/<id>?category=EXPENSE` or `?q=whole foods`). If the category list can't be loaded,
     searching still works but the groupings aren't offered.
 
+## Spending
+
+**Spending** in the sidebar (or the switch at the top on phones) opens `#/spending`: a donut of
+where money went, with the total in the middle, for **Past week**, **Past month** (default),
+**Past year** or **This year** (Jan 1 to date). Periods end on the transactions file's last day.
+Hover a slice for its amount and share; pick a slice or its row in the legend to list its
+transactions below (10 per page, newest first, expandable like on the account screen); pick it
+again (or Clear) to deselect. The period and slice are kept in the URL
+(`#/spending?range=year&slice=groceries`). Uses the saved `transactions` and `categories`; no
+Empower calls.
+
+Each spending transaction lands in one slice, checked in this order:
+1. **Subscriptions:** charges belonging to a detected subscription (see below), including ones
+   that have since ended, so past periods count them.
+2. **Restaurants**, **Groceries**, **Utilities** (Utilities, Cable/Satellite and Telephone): by the
+   category list's name for the transaction's `categoryId`.
+3. **Other shopping:** every other Expense (or Uncategorized) transaction.
+
+Spending is money out in the Expense group; transfers, card payments and income aren't spending.
+Refunds (money in with an Expense category) reduce their slice. Slice colours are fixed per slice
+and were validated as a set, including the donut's wrap-around pair, on the dark card surface.
+
 ## Subscriptions
 
 **Subscriptions** in the sidebar (or the Dashboard / Subscriptions switch at the top on phones)
@@ -168,6 +190,7 @@ src/
   categories.ts Transaction category grouping (Income/Expenses/Transfers/Uncategorized) and filtering
   filterbox.ts  The transactions filter box: grouping list + free-text search (ARIA combobox)
   subscriptions.ts Recurring-charge detection and the Subscriptions screen
+  spending.ts   Spending slices, periods, totals, donut and legend
   trends.ts     24h / 90-day investment trends from the saved performance file, in-memory cache
   main.ts       App shell, nav, key prompt flow, refresh + 5-minute polling, routing + screen transitions
   config.ts     Personal settings (emergency fund account and monthly expenses)
