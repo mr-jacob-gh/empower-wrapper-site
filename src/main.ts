@@ -98,14 +98,11 @@ const root = document.querySelector<HTMLDivElement>("#app")!;
 root.innerHTML = `
   <div class="app">
     <aside class="sidebar">
-      <div class="sidebar__head">
-        <div class="brand"><span class="brand__mark">${icons.logo}</span><span>Empower</span></div>
-        <a class="icon-btn" href="#/settings" data-nav="settings" aria-label="Settings" title="Settings">${icons.settings}</a>
-      </div>
       <nav class="nav" aria-label="Main">
         <a class="nav__item is-active" href="#" data-nav="dashboard" aria-current="page">${icons.dashboard}<span>Summary</span></a>
         <a class="nav__item" href="#/spending" data-nav="spending">${icons.pie}<span>Spending</span></a>
         <a class="nav__item" href="#/subscriptions" data-nav="subscriptions">${icons.repeat}<span>Subscriptions</span></a>
+        <a class="nav__item" href="#/settings" data-nav="settings">${icons.settings}<span>Settings</span></a>
       </nav>
       <div class="sidebar__foot">
         <div class="muted small">Service</div>
@@ -114,15 +111,12 @@ root.innerHTML = `
     </aside>
 
     <header class="topbar">
-      <div class="brand"><span class="brand__mark">${icons.logo}</span><span>Empower</span></div>
       <nav class="topnav" aria-label="Main">
         <a class="topnav__item is-active" href="#" data-nav="dashboard" aria-current="page">Summary</a>
         <a class="topnav__item" href="#/spending" data-nav="spending">Spending</a>
         <a class="topnav__item" href="#/subscriptions" data-nav="subscriptions">Subscriptions</a>
+        <a class="topnav__item topnav__item--icon" href="#/settings" data-nav="settings" aria-label="Settings" title="Settings">${icons.settings}</a>
       </nav>
-      <div class="topbar__actions">
-        <a class="icon-btn" href="#/settings" data-nav="settings" aria-label="Settings" title="Settings">${icons.settings}</a>
-      </div>
     </header>
 
     <main class="main">

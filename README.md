@@ -33,13 +33,14 @@ The deployed site calls `https://beefjerky67.asuscomm.com:44300` (override at bu
 The page asks for an API key (from the service's `data/api-keys.txt`) and sends it as
 `X-API-Key`. The key is **never in the code or the repo**: anything in a GitHub Pages build is
 public. It's stored only in the browser you enter it in ("Remember on this device" uses
-localStorage; unticked, it lasts until the tab closes). **Settings → Forget API key** (the cog at
-the top of the sidebar, or top-right on mobile) removes it after a confirmation. If the service
+localStorage; unticked, it lasts until the tab closes). **Settings → Forget API key** (Settings in the
+sidebar, or the cog at the end of the page switch on mobile) removes it after a confirmation. If the service
 rejects a key, the page clears it and asks again.
 
 ### Settings
 
-The cog button opens Settings (`#/settings`):
+**Settings** (last in the sidebar; the cog at the end of the page switch on mobile) opens
+`#/settings`:
 
 - **Household details** is a form over the service's `/settings` store (`GET /settings` to fill it,
   `PATCH /settings` to save, so other keys are left alone). It has **Household income**
