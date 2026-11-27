@@ -70,7 +70,7 @@ root.innerHTML = `
     <aside class="sidebar">
       <div class="brand"><span class="brand__mark">${icons.logo}</span><span>Empower</span></div>
       <nav class="nav" aria-label="Main">
-        <a class="nav__item is-active" href="#" data-nav="dashboard" aria-current="page">${icons.dashboard}<span>Dashboard</span></a>
+        <a class="nav__item is-active" href="#" data-nav="dashboard" aria-current="page">${icons.dashboard}<span>Summary</span></a>
         <a class="nav__item" href="#/spending" data-nav="spending">${icons.pie}<span>Spending</span></a>
         <a class="nav__item" href="#/subscriptions" data-nav="subscriptions">${icons.repeat}<span>Subscriptions</span></a>
       </nav>
@@ -84,7 +84,7 @@ root.innerHTML = `
     <header class="topbar">
       <div class="brand"><span class="brand__mark">${icons.logo}</span><span>Empower</span></div>
       <nav class="topnav" aria-label="Main">
-        <a class="topnav__item is-active" href="#" data-nav="dashboard" aria-current="page">Dashboard</a>
+        <a class="topnav__item is-active" href="#" data-nav="dashboard" aria-current="page">Summary</a>
         <a class="topnav__item" href="#/spending" data-nav="spending">Spending</a>
         <a class="topnav__item" href="#/subscriptions" data-nav="subscriptions">Subscriptions</a>
       </nav>
@@ -99,7 +99,7 @@ root.innerHTML = `
         <div class="screen" data-screen="dashboard">
           <div class="page-head">
             <div>
-              <h1>Dashboard</h1>
+              <h1>Summary</h1>
               <div id="freshness" class="freshness"></div>
             </div>
             <button class="btn btn--accent page-head__btn" data-action="reload">${icons.refresh}<span>Refresh</span></button>
