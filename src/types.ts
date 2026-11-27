@@ -67,6 +67,14 @@ export interface AccountDetail extends Account {
     aggregationErrorType?: string;
   } | null;
   isRefetchTransactionEligible?: boolean;
+  /** Matches balance for bank and investment accounts; 0 for credit cards and loans. */
+  currentBalance?: number | null;
+  /** Bank accounts only: what the bank says can be spent now (pending items, overdraft protection). */
+  availableBalance?: number | null;
+  /** Credit cards: credit limit minus balance owed. */
+  availableCredit?: number | null;
+  /** Investment accounts: uninvested cash, as a string (e.g. "208.09"). */
+  availableCash?: string | null;
 }
 
 /** `GET /data/accounts`: every account with full detail. */

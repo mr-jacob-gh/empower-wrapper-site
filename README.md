@@ -47,7 +47,9 @@ rejects a key, the page clears it and asks again.
   (`householdIncome`, saved as a number, or `null` when blank) and **Addresses**
   (`zestimateAddresses`, a list of strings; **+ Add address** adds a row, × removes one). Blank rows
   are dropped and duplicates are refused. The service looks the addresses up daily on its own; the
-  form never calls the paid `POST /zestimate/refresh`. To add a field, add it to `FIELDS` in
+  form never calls the paid `POST /zestimate/refresh`. **Loan interest rates**
+  (`loanInterestRates`) has a % box per loan account, saved as `{"<userAccountId>": 6.25}`; blank
+  boxes are left out, and rates saved for loans no longer listed are kept. To add a field, add it to `FIELDS` in
   `src/appsettings.ts`.
 - **Reload data** re-reads the files the service has saved (no Empower call). The service updates
   them every 15 minutes on its own.
@@ -101,6 +103,16 @@ The file is read when you open the Investments panel, reused for 5 minutes, re-r
 only**, for the open tab. It's never written to browser storage, the repo, GitHub or the service,
 and it's dropped when you forget the API key.
 
+## Available balance and credit
+
+From the saved `accounts` dataset (read with the summary): cash (checking/savings) account rows
+show only the **available balance** (`availableBalance`, what the bank says can be spent now). On
+the account screen it's the main figure, with the regular balance in the details (they differ with
+pending items or overdraft protection). Credit card rows keep the balance owed and show the
+**available credit** (`availableCredit`) under it; the account screen lists it in its details. If
+the accounts file can't be read, plain balances are shown. Tile and group totals stay
+balance-based, so they match net worth.
+
 ## Debt-to-income
 
 The Net worth card shows **Debt-to-income**: average monthly debt payments ÷ monthly gross income
@@ -110,7 +122,8 @@ linking to Settings. Click the figure for the breakdown (payments by source, inc
 Debt payments come from the saved transactions over the last 3 complete calendar months
 (`src/dti.ts`):
 
-- payments into linked loan and mortgage accounts (credits on `LOAN` / `MORTGAGE` accounts),
+- payments into linked loan and mortgage accounts (credits on loan accounts, recognised by
+  `accountTypeGroup` or, when that's null as it is for some mortgages, `productType: "LOAN"`),
 - payments into linked credit cards (credits on `CREDIT_CARD` accounts in a "credit card payment"
   category; other credits on a card are refunds and are left out), and
 - money out of other accounts in a category whose name contains "mortgage", "loan" or "credit card
@@ -119,6 +132,21 @@ Debt payments come from the saved transactions over the last 3 complete calendar
 A payment seen on both sides (out of checking and into the linked loan or card, same amount within
 5 days) counts once. Credit card payments are what was actually paid, often the full statement, so
 the ratio can be higher than a lender's, which uses the minimum payment.
+
+## Loan payoff estimates
+
+Loan rows on the Summary page show **Est. payoff Mon YYYY**; the loan's account screen shows the
+date, time left, and the payment and rate it used (`src/payoff.ts`).
+
+- **Payment:** the median of the monthly totals paid into the loan account over the last 3 complete
+  months (needs a payment in at least 2 of them). With a rate from Settings and balance history, the
+  payment is principal + interest instead (how much the balance fell + that month's interest),
+  which leaves out escrow.
+- **Rate:** Settings → Household details → Loan interest rates, if entered. Otherwise estimated from
+  the balance history: interest = payment − how much the balance fell, ÷ the balance at the start
+  of the month. An estimate above 25% (likely escrow) isn't used; the screen asks for the rate.
+- **Months left:** n = −ln(1 − r·B/P) / ln(1 + r), which accounts for more of each payment going to
+  principal over time. A payment that doesn't cover the interest is flagged.
 
 ## Zestimate
 
@@ -136,7 +164,9 @@ and isn't added to net worth.
 Wherever an account's sync time is shown (the "Synced … ago" line on dashboard rows and
 "Last synced" on the account screen), an amber warning icon appears in front of it when Empower
 hasn't synced that account for more than 24 hours (`lastRefreshed` in the summary). Hovering or a
-screen reader gives "Not synced in over 24 hours".
+screen reader gives "Not synced in over 24 hours". The time comes from `lastRefreshed` in the
+saved `accounts` dataset (when Empower last heard from the bank), falling back to the summary's copy,
+which can lag behind.
 
 Accounts Empower can't update until you reconnect them get an amber **Reconnect in Empower** flag
 on their dashboard row (and an amber account icon), and a note on the account screen with the reason
@@ -264,6 +294,7 @@ src/
   health.ts     Which accounts need reconnecting in Empower (from the accounts dataset)
   dti.ts        Debt-to-income: monthly loan, mortgage and credit card payments ÷ household income
   homevalue.ts  Zestimate on the Net worth card (saved lookups from GET /zestimate)
+  payoff.ts     Loan payoff estimate: payment and rate from transactions, balance history and Settings
   auth.ts       Stores the API key in this browser only
   types.ts      Types for the API's summary and performance datasets
   dashboard.ts  Views: net worth, category tiles, account panels, trend pills, key prompt, errors

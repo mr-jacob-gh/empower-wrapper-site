@@ -68,6 +68,9 @@ async function request<T>(
     res = await fetch(`${API_BASE}${path}`, {
       method,
       signal,
+      // Always check with the service: never reuse a copy the browser kept (the service updates its
+      // files every 15 minutes, and a kept copy would show old numbers). Unchanged files cost a 304.
+      cache: "no-cache",
       headers: {
         Accept: "application/json",
         "X-API-Key": key,

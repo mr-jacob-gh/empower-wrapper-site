@@ -17,8 +17,10 @@ import { clearApiKey, getApiKey, setApiKey } from "./auth";
 import { confirmDialog } from "./confirm";
 import { setAccountHealth } from "./health";
 import { computeDti } from "./dti";
+import { computePayoff, type Payoff } from "./payoff";
 import { applyHomeValue, type HomeState } from "./homevalue";
 import {
+  type AppContext,
   appFieldsHtml,
   newListRowHtml,
   readAppForm,
@@ -32,10 +34,12 @@ import { riStatusHtml, settingsShellHtml, type RiView } from "./settings";
 import {
   applySelection,
   applyDti,
+  applyPayoffs,
   applyTrends,
   dashboardHtml,
   errorHtml,
   findAccount,
+  groupInfo,
   hasTrends,
   keyFormHtml,
   loadingHtml,
@@ -242,6 +246,7 @@ async function load(showSkeleton: boolean): Promise<void> {
     if (selected === "investments") loadTrends(false);
     void loadDti();
     void loadHome();
+    void loadPayoffs();
     applyRoute(false);
   } catch (err) {
     if (ctrl.signal.aborted) return;
@@ -449,6 +454,10 @@ function renderAccount(id: number, fresh: boolean): void {
     if (box) mountFilterBox(box, { category: accountUi.category, query: accountUi.query }, setFilter);
   } else {
     hero.outerHTML = heroHtml(found); // new balance/sync time after a poll
+  }
+  if (found.info.category === "loans") {
+    renderPayoffs();
+    void loadPayoffs();
   }
   if (withTrends) {
     renderTrends();
@@ -778,6 +787,15 @@ const app: {
 
 const appForm = (): HTMLFormElement | null => settingsScreen.querySelector<HTMLFormElement>("[data-form='app-settings']");
 
+/** The loan accounts (for the interest-rate rows), from the summary. */
+function appCtx(): AppContext {
+  const accounts = [...(summary?.empowerAccounts ?? []), ...(summary?.aggregatedAccounts ?? [])];
+  const loans = accounts
+    .filter((a) => !a.closedDate && groupInfo(a).category === "loans" && typeof a.userAccountId === "number")
+    .map((a) => ({ id: String(a.userAccountId), name: a.name || a.originalName || "Loan", firm: a.firmName ?? "" }));
+  return { loans };
+}
+
 const errText = (err: unknown): string =>
   err instanceof ApiError && err.kind === "network" ? "couldn't reach the service." : err instanceof Error ? err.message : String(err);
 
@@ -785,7 +803,7 @@ const errText = (err: unknown): string =>
 function drawAppState(): void {
   const form = appForm();
   if (!form) return;
-  const dirty = app.saved !== null && !sameValues(readAppForm(form).values, app.saved);
+  const dirty = app.saved !== null && !sameValues(readAppForm(form, app.saved).values, app.saved);
   const save = form.querySelector<HTMLButtonElement>("[data-role='app-save']")!;
   save.disabled = !app.saved || app.saving || !dirty;
   save.textContent = app.saving ? "Saving…" : "Save settings";
@@ -833,10 +851,10 @@ function ensureSettings(force: boolean): Promise<void> {
       const form = appForm();
       const fields = form?.querySelector<HTMLElement>("[data-role='app-fields']");
       const showing = fields && !fields.querySelector(".skeleton, .inline-error");
-      const dirty = Boolean(showing && app.saved && !sameValues(readAppForm(form!).values, app.saved));
+      const dirty = Boolean(showing && app.saved && !sameValues(readAppForm(form!, app.saved).values, app.saved));
       if (dirty) return; // don't pull values out from under unsaved edits
       app.saved = valuesFromSettings(data ?? []);
-      if (fields) fields.innerHTML = appFieldsHtml(app.saved);
+      if (fields) fields.innerHTML = appFieldsHtml(app.saved, appCtx());
     })
     .finally(() => {
       app.loading = false;
@@ -851,7 +869,7 @@ async function loadAppSettings(): Promise<void> {
   const fields = settingsScreen.querySelector<HTMLElement>("[data-role='app-fields']");
   if (!fields || !getApiKey()) return;
   if (app.saved && fields.querySelector(".skeleton, .inline-error")) {
-    fields.innerHTML = appFieldsHtml(app.saved);
+    fields.innerHTML = appFieldsHtml(app.saved, appCtx());
     drawAppState();
     return;
   }
@@ -925,6 +943,68 @@ async function loadHome(): Promise<void> {
   renderHome();
 }
 
+// ---------- Loan payoff estimates ----------
+
+let payoffProblem: string | null = null;
+/** The balance history couldn't be loaded: estimate from payments alone. */
+let payoffNoHistory = false;
+
+function loanAccounts() {
+  const accounts = [...(summary?.empowerAccounts ?? []), ...(summary?.aggregatedAccounts ?? [])];
+  return accounts.filter((a) => !a.closedDate && groupInfo(a).category === "loans" && typeof a.userAccountId === "number");
+}
+
+const savedLoanRate = (id: number): number | null => {
+  const rates = app.saved?.loanInterestRates;
+  const v = rates && typeof rates === "object" && !Array.isArray(rates) ? (rates as Record<string, number>)[String(id)] : undefined;
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+};
+
+/** Null until the transactions and balance history are loaded (or the history failed to load). */
+function payoffMap(): Map<number, Payoff> | null {
+  const tx = transactions.peek()?.data.spData?.transactions;
+  if (!tx || !summary) return null;
+  const loans = loanAccounts();
+  const history = balanceHistory.peek()?.data ?? null;
+  if (!history && !payoffNoHistory) return null;
+  const map = new Map<number, Payoff>();
+  for (const a of loans) {
+    map.set(
+      a.userAccountId!,
+      computePayoff({ userAccountId: a.userAccountId!, balance: a.balance ?? 0, transactions: tx, history, savedRate: savedLoanRate(a.userAccountId!) }),
+    );
+  }
+  return map;
+}
+
+function renderPayoffs(): void {
+  const map = payoffMap();
+  applyPayoffs(content, map, payoffProblem);
+  applyPayoffs(accountScreen, map, payoffProblem);
+}
+
+/**
+ * Loads what the estimates need: transactions (required) and the balance history (used to estimate
+ * the rate, and with a saved rate to leave escrow out of the payment; without it, payments alone).
+ */
+async function loadPayoffs(): Promise<void> {
+  if (!loanAccounts().length) return;
+  renderPayoffs();
+  await ensureSettings(false).catch(() => {});
+  const [txns, history] = await Promise.allSettled([transactions.get(), balanceHistory.get()]);
+  payoffProblem = null;
+  payoffNoHistory = false;
+  if (txns.status === "rejected") {
+    if (handleKeyError(txns.reason)) return;
+    payoffProblem = `Couldn't load transactions: ${errText(txns.reason)}`;
+  }
+  if (history.status === "rejected") {
+    if (handleKeyError(history.reason)) return;
+    payoffNoHistory = true;
+  }
+  renderPayoffs();
+}
+
 /** Needs the household income (settings) and the saved transactions; categories help but are optional. */
 async function loadDti(): Promise<void> {
   renderDti();
@@ -947,7 +1027,7 @@ async function loadDti(): Promise<void> {
 
 async function submitAppSettings(form: HTMLFormElement): Promise<void> {
   if (app.saving || !app.saved) return;
-  const { values, errors } = readAppForm(form);
+  const { values, errors } = readAppForm(form, app.saved);
   showFieldErrors(form, errors);
   if (Object.keys(errors).length) {
     form.querySelector<HTMLInputElement>(".is-invalid")?.focus();
@@ -963,9 +1043,10 @@ async function submitAppSettings(form: HTMLFormElement): Promise<void> {
     app.savedAt = new Date();
     renderDti(); // income may have changed
     renderHome(); // addresses may have changed
+    renderPayoffs(); // loan rates may have changed
     // Redraw from what was saved: blank rows dropped, amounts formatted.
     const fields = form.querySelector<HTMLElement>("[data-role='app-fields']");
-    if (fields) fields.innerHTML = appFieldsHtml(app.saved);
+    if (fields) fields.innerHTML = appFieldsHtml(app.saved, appCtx());
   } catch (err) {
     if (handleKeyError(err)) return;
     app.saveProblem = `Couldn't save: ${errText(err)}`;

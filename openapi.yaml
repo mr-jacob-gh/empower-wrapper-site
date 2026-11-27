@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Empower Local Service API
-  version: 1.8.0
+  version: 1.8.1
   description: |
     Access to one person's Empower (Personal Dashboard) financial data, collected by a Windows
     service running on their own PC. The Empower data is read-only. The only thing clients can
@@ -1006,6 +1006,12 @@ components:
         accountTypeGroup: { $ref: "#/components/schemas/AccountGroup" }
         productType: { type: string }
         balance: { type: number }
+        currentBalance: { type: [number, "null"], description: "accounts only. Matches balance for bank and investment accounts; 0 for credit cards and loans." }
+        availableBalance:
+          type: [number, "null"]
+          description: "accounts only, bank accounts only (absent otherwise): what the bank says can be spent now. Can differ from balance, e.g. pending items or overdraft protection (balance -746.86, availableBalance 1608.76)."
+        availableCredit: { type: [number, "null"], description: "accounts only, credit cards: creditLimit minus balance owed." }
+        availableCash: { type: [string, "null"], description: "Investment accounts: uninvested cash, as a string (e.g. \"208.09\")." }
         isAsset: { type: boolean, description: "False for liabilities such as credit cards and loans." }
         creditLimit: { type: [number, "null"] }
         currency: { type: string }

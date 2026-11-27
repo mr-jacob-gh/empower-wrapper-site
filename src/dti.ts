@@ -1,8 +1,9 @@
 // Debt-to-income ratio: average monthly debt payments ÷ gross monthly income.
 //
 // Debt payments come from the saved transactions over the last 3 complete calendar months:
-//   1. Payments into linked loan and mortgage accounts (credits on LOAN / MORTGAGE accounts).
-//   2. Payments into linked credit cards: credits on CREDIT_CARD accounts categorized as a credit
+//   1. Payments into linked loan and mortgage accounts (credits on loan accounts; recognised like the
+//      dashboard does, by accountTypeGroup or, when that's null, productType "LOAN").
+//   2. Payments into linked credit cards: credits on credit card accounts categorized as a credit
 //      card payment (other credits on a card are refunds, so they're left out).
 //   3. Money out of other accounts categorized as a mortgage, loan or credit card payment
 //      ("Mortgages", "Loans", "Student Loans", "Credit Card Payments", ...), for debts that
@@ -12,11 +13,10 @@
 // whole statement rather than the minimum payment a lender would use.
 
 import type { Account, Transaction, TransactionCategory } from "./types";
+import { groupInfo } from "./dashboard";
 
 export const DTI_MONTHS = 3;
 const MATCH_DAYS = 5;
-const LOAN_GROUPS = new Set(["LOAN", "MORTGAGE"]);
-const CARD_GROUP = "CREDIT_CARD";
 const isCardPayment = (name: string): boolean => /credit\s*card\s*payment/i.test(name);
 const isDebtCategory = (name: string): boolean => /mortgage|loan/i.test(name) || isCardPayment(name);
 
@@ -67,7 +67,7 @@ export function computeDti(
   const months = windowMonths(range.start, end, DTI_MONTHS);
   const inWindow = new Set(months);
   const catName = new Map((categories ?? []).map((c) => [c.transactionCategoryId, c.name ?? ""]));
-  const group = new Map(accounts.map((a) => [a.userAccountId, a.accountTypeGroup ?? ""]));
+  const kind = new Map(accounts.map((a) => [a.userAccountId, groupInfo(a).category]));
   const name = new Map(accounts.map((a) => [a.userAccountId, a.name || a.originalName || "Loan"]));
 
   const categoryOf = (t: Transaction): string =>
@@ -81,10 +81,10 @@ export function computeDti(
     if (t.isDuplicate || !t.transactionDate || !inWindow.has(t.transactionDate.slice(0, 7))) continue;
     const amount = Math.abs(t.amount ?? 0);
     if (!amount) continue;
-    const g = String(group.get(t.userAccountId) ?? "");
-    if (LOAN_GROUPS.has(g)) {
+    const k = kind.get(t.userAccountId);
+    if (k === "loans") {
       if (t.isCredit) loanIn.push(t);
-    } else if (g === CARD_GROUP) {
+    } else if (k === "credit") {
       if (t.isCredit && isCardPayment(categoryOf(t))) loanIn.push(t);
     } else if (!t.isCredit && isDebtCategory(categoryOf(t))) {
       categorized.push(t);

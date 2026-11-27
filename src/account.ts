@@ -10,7 +10,7 @@ import { dateTime, esc, mediumDate, moneyCents, moneyParts, monthYear, shortDate
 import { icons } from "./icons";
 import { hasTrends, signedBalance, syncedHtml, type GroupInfo, type Row } from "./dashboard";
 import { dayNumber, mountLineChart, type Point } from "./chart";
-import { needsReconnect } from "./health";
+import { availableBalance, availableCredit, lastRefreshedFor, needsReconnect } from "./health";
 
 export type ChartRange = "24h" | "90d";
 export const PAGE_SIZE = 10;
@@ -71,21 +71,31 @@ const TYPE_LABEL: Partial<Record<string, string>> = {
 /** Name, balance, details and, for investment-type accounts, 24h/90d pills (filled by applyTrends). */
 export function heroHtml({ account: a, isEmpower, info }: Found): string {
   const balance = signedBalance(a, info);
-  const [whole, cents] = moneyParts(balance);
-  const synced = a.lastRefreshed ? new Date(a.lastRefreshed) : null;
+  const availBal = availableBalance(a.userAccountId);
+  // Checking/savings: the available balance is the main figure, and the balance moves to the details.
+  const showAvailable = info.category === "cash" && availBal !== null;
+  const main = showAvailable ? availBal : balance;
+  const [whole, cents] = moneyParts(main);
+  const lastRefreshed = lastRefreshedFor(a.userAccountId, a.lastRefreshed);
+  const synced = lastRefreshed ? new Date(lastRefreshed) : null;
   const type = TYPE_LABEL[a.accountTypeGroup ?? ""] ?? info.label;
   // productType is an enum like "CHECKING" or "CREDIT_CARD": show it as "Checking", unless it repeats the type.
   const product = (a.productType ?? "").replace(/_/g, " ").toLowerCase().trim();
   const productLabel = product && product !== type.toLowerCase() ? product[0]!.toUpperCase() + product.slice(1) : "";
   const limit = typeof a.creditLimit === "number" && a.creditLimit > 0 ? a.creditLimit : null;
+  // Prefer Empower's availableCredit; fall back to limit − balance.
+  const credit = availableCredit(a.userAccountId) ?? (limit !== null ? Math.max(0, limit - Math.abs(balance)) : null);
   // Values are HTML: escaped here, so "Last synced" can carry its warning icon.
   const details: [string, string][] = [
     ["Institution", esc(a.firmName ?? "")],
     ["Type", esc([type, productLabel].filter(Boolean).join(" · "))],
     ["Account holder", esc(a.accountHolder ?? "")],
+    ["Balance", showAvailable ? esc(moneyCents(balance)) : ""],
     ["Credit limit", limit !== null ? esc(moneyCents(limit)) : ""],
-    ["Available credit", limit !== null ? esc(moneyCents(Math.max(0, limit - Math.abs(balance)))) : ""],
-    ["Last synced", synced ? syncedHtml(a.lastRefreshed, `${dateTime(synced)} (${timeAgo(synced)})`) : ""],
+    ["Available credit", credit !== null ? esc(moneyCents(credit)) : ""],
+    // Loans: filled by applyPayoffs() once transactions (and maybe balance history) are in.
+    ["Estimated payoff", info.category === "loans" ? `<span data-payoff-detail="${a.userAccountId}"><span class="muted">Calculating…</span></span>` : ""],
+    ["Last synced", synced ? syncedHtml(lastRefreshed, `${dateTime(synced)} (${timeAgo(synced)})`) : ""],
   ];
   const reconnect = needsReconnect(a.userAccountId);
   const note = reconnect
@@ -108,7 +118,7 @@ export function heroHtml({ account: a, isEmpower, info }: Found): string {
         <div class="muted small">${[a.firmName, type].filter(Boolean).map(esc).join(" · ")}</div>
       </div>
     </div>
-    <div class="acct-hero__bal${balance < 0 ? " is-neg" : ""}">${esc(whole)}<span class="acct-hero__cents">${esc(cents)}</span></div>
+    <div class="acct-hero__bal${main < 0 ? " is-neg" : ""}">${esc(whole)}<span class="acct-hero__cents">${esc(cents)}</span></div>
     ${hasTrends(info) ? `<div class="acct__trends" data-trend-id="${a.userAccountId}"></div>` : ""}
     ${note}
     <dl class="details">

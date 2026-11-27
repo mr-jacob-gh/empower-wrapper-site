@@ -3,8 +3,9 @@ import { esc, money, moneyCents, moneyParts, percent, shortDate, signedMoney, si
 import { icons } from "./icons";
 import { EMERGENCY_FUND } from "./config";
 import type { Change, TrendState } from "./trends";
-import { needsReconnect, type Reconnect } from "./health";
+import { availableBalance, availableCredit, lastRefreshedFor, needsReconnect, type Reconnect } from "./health";
 import type { Dti } from "./dti";
+import { duration, monthYear, type Payoff } from "./payoff";
 
 // ---------- Categories (one per tile) and account groups ----------
 
@@ -171,12 +172,35 @@ export function reconnectFlagHtml(r: Reconnect): string {
   return `<span class="reconnect" title="${esc(tip)}"><span class="reconnect__icon" aria-hidden="true">${icons.alert}</span>Reconnect in Empower</span>`;
 }
 
+/**
+ * The row's amount. Cash (checking/savings) accounts show only the available balance (what can be
+ * spent now) when the accounts dataset has it. Credit cards show the balance owed with the
+ * available credit under it.
+ */
+function balanceHtml(a: Account, info: GroupInfo, signed: number): string {
+  if (info.category === "cash") {
+    const avail = availableBalance(a.userAccountId);
+    if (avail !== null) return `<div class="acct__bal${avail < 0 ? " is-neg" : ""}">${moneyCents(avail)}</div>`;
+  }
+  if (info.category === "credit") {
+    const credit = availableCredit(a.userAccountId);
+    if (credit !== null) {
+      return `<div class="acct__bal${signed < 0 ? " is-neg" : ""}">${moneyCents(signed)}<span class="acct__bal-note">${esc(moneyCents(credit))} available</span></div>`;
+    }
+  }
+  return `<div class="acct__bal${signed < 0 ? " is-neg" : ""}">${moneyCents(signed)}</div>`;
+}
+
 function accountRow({ account: a, isEmpower }: Row, info: GroupInfo): string {
   const bal = num(a.balance);
   const signed = info.liability ? -Math.abs(bal) : bal;
-  const synced = a.lastRefreshed ? syncedHtml(a.lastRefreshed, `Synced ${timeAgo(new Date(a.lastRefreshed))}`) : "";
+  const lastRefreshed = lastRefreshedFor(a.userAccountId, a.lastRefreshed);
+  const synced = lastRefreshed ? syncedHtml(lastRefreshed, `Synced ${timeAgo(new Date(lastRefreshed))}`) : "";
   const reconnect = needsReconnect(a.userAccountId);
-  const sub = [reconnect ? reconnectFlagHtml(reconnect) : "", a.firmName ? esc(a.firmName) : "", synced].filter(Boolean).join(" · ");
+  const sub =
+    [reconnect ? reconnectFlagHtml(reconnect) : "", a.firmName ? esc(a.firmName) : "", synced].filter(Boolean).join(" · ") +
+    // Loans: "· Est. payoff Mar 2041", filled by applyPayoffs() once transactions are in.
+    (info.category === "loans" ? `<span class="payoff" data-payoff-id="${a.userAccountId}"></span>` : "");
   const fund = a.userAccountId === EMERGENCY_FUND.userAccountId ? emergencyFundBadge(bal) : "";
   // Investment-type rows get a slot that applyTrends() fills in.
   const detail = opensDetail(info, a);
@@ -195,7 +219,7 @@ function accountRow({ account: a, isEmpower }: Row, info: GroupInfo): string {
       <div class="acct__sub">${sub}</div>
     </div>
     ${fund}${trend}
-    <div class="acct__bal${signed < 0 ? " is-neg" : ""}">${moneyCents(signed)}</div>
+    ${balanceHtml(a, info, signed)}
     ${detail ? `<span class="acct__chev" aria-hidden="true">${icons.chevronRight}</span>` : ""}
   </li>`;
 }
@@ -310,6 +334,51 @@ function trendPill(label: string, c: Change | null | undefined, tip: string): st
 
 const loadingPill = (label: string): string =>
   `<span class="trend is-loading" aria-hidden="true"><span class="trend__label">${label}</span><span class="trend__value"></span></span>`;
+
+// ---------- Loan payoff estimates (filled once transactions are loaded) ----------
+
+const pctRate = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+function payoffDetailHtml(p: Payoff | undefined, problem: string | null): string {
+  if (!p) return problem ? `<span class="muted">Unavailable</span><small class="dd-sub">${esc(problem)}</small>` : `<span class="muted">Calculating…</span>`;
+  const rate = (pRate: number, source: "settings" | "estimated") =>
+    `${pctRate.format(pRate)}% ${source === "settings" ? "(from Settings)" : "(estimated from balance history)"}`;
+  switch (p.status) {
+    case "ok":
+      return `${esc(monthYear(p.date))} <span class="muted">(${esc(duration(p.months))})</span>
+        <small class="dd-sub">${esc(moneyCents(p.payment))}/mo${p.paymentKind === "principal-interest" ? " principal &amp; interest" : ""} at ${esc(rate(p.annualRate, p.rateSource))}</small>`;
+    case "paid":
+      return "Paid off";
+    case "no-payments":
+      return `<span class="muted">Not enough payment history</span>
+        <small class="dd-sub">Needs payments into this account in at least 2 of the last 3 months.</small>`;
+    case "need-rate":
+      return `<a class="link" href="#/settings">Add the interest rate</a> to estimate
+        <small class="dd-sub">${esc(moneyCents(p.payment))}/mo paid; the rate couldn't be worked out from the balance history.</small>`;
+    case "never":
+      return `<span class="warn-text">Payment doesn't cover the interest</span>
+        <small class="dd-sub">${esc(moneyCents(p.payment))}/mo${p.paymentKind === "principal-interest" ? " principal &amp; interest" : ""} at ${esc(rate(p.annualRate, p.rateSource))}</small>`;
+  }
+}
+
+/**
+ * Fill loan payoff slots: "· Est. payoff Mar 2041" on Summary rows, and the "Estimated payoff"
+ * detail on a loan's account screen. `payoffs` is null while the data is loading.
+ */
+export function applyPayoffs(container: ParentNode, payoffs: Map<number, Payoff> | null, problem: string | null): void {
+  for (const el of container.querySelectorAll<HTMLElement>("[data-payoff-id]")) {
+    const p = payoffs?.get(Number(el.dataset.payoffId));
+    el.innerHTML =
+      p?.status === "ok"
+        ? ` · <span class="nowrap">Est. payoff ${esc(monthYear(p.date))}</span>`
+        : p?.status === "never"
+          ? ` · <span class="warn-text nowrap">Payment doesn't cover interest</span>`
+          : "";
+  }
+  for (const el of container.querySelectorAll<HTMLElement>("[data-payoff-detail]")) {
+    el.innerHTML = payoffDetailHtml(payoffs?.get(Number(el.dataset.payoffDetail)), payoffs ? null : problem);
+  }
+}
 
 // ---------- Debt-to-income (filled after the summary renders) ----------
 
