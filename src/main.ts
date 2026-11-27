@@ -97,11 +97,9 @@ root.innerHTML = `
     <main class="main">
       <div class="stage">
         <div class="screen" data-screen="dashboard">
-          <div class="page-head">
-            <div>
-              <h1>Summary</h1>
-              <div id="freshness" class="freshness"></div>
-            </div>
+          <div class="page-head page-head--inline">
+            <h1>Summary</h1>
+            <div id="freshness" class="freshness"></div>
             <button class="btn btn--accent page-head__btn" data-action="reload">${icons.refresh}<span>Refresh</span></button>
           </div>
           <div id="content"></div>

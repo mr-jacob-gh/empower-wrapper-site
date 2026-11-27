@@ -183,6 +183,11 @@ ul { margin: 0; padding: 0; list-style: none; }
 .page-head h1 { font-size: 28px; letter-spacing: -0.3px; }
 
 .freshness { min-height: 26px; margin-top: 6px; }
+/* Summary: title, "Last fetched" and Refresh on one line, "Last fetched" pushed right.
+   On very narrow screens it wraps under the title, still right-aligned. */
+.page-head--inline { align-items: center; flex-wrap: wrap; row-gap: 8px; }
+.page-head--inline .freshness { display: flex; align-items: center; margin: 0 0 0 auto; }
+.page-head--inline .chip { white-space: nowrap; }
 .chip {
   display: inline-flex;
   align-items: center;
