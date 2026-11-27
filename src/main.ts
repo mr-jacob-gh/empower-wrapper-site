@@ -1,6 +1,7 @@
 import "./styles.css";
 import { API_BASE, ApiError, getCategories, getNetWorthHistory, getSummary, getTransactions } from "./api";
 import { clearApiKey, getApiKey, setApiKey } from "./auth";
+import { confirmDialog } from "./confirm";
 import {
   applySelection,
   applyTrends,
@@ -830,13 +831,26 @@ function describeError(err: unknown): string {
 
 // ---------- Events ----------
 
+/** Ask first, so a stray click doesn't mean re-entering the key. */
+async function confirmForgetKey(): Promise<void> {
+  const ok = await confirmDialog({
+    title: "Forget API key?",
+    body: "You'll need to enter the key again to see your data in this browser.",
+    confirm: "Forget key",
+    cancel: "Keep key",
+    icon: icons.logout,
+  });
+  if (!ok) return;
+  clearApiKey();
+  showKeyForm();
+}
+
 root.addEventListener("click", (e) => {
   const el = e.target as Element;
 
   if (el.closest("[data-action='forget-key']")) {
     e.preventDefault();
-    clearApiKey();
-    showKeyForm();
+    void confirmForgetKey();
     return;
   }
 

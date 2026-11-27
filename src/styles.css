@@ -278,6 +278,7 @@ ul { margin: 0; padding: 0; list-style: none; }
    panels hide it and keep their accent ring. */
 .card, .acct, .txn, .sub { position: relative; }
 .card::before,
+.confirm::before,
 .acct::before,
 .txn::before,
 .sub::before,
@@ -1028,6 +1029,53 @@ ul { margin: 0; padding: 0; list-style: none; }
 .error__body ul { list-style: disc; padding-left: 20px; display: grid; gap: 8px; }
 .error__body a { color: var(--accent); }
 .error__body strong { color: var(--text); font-weight: 600; }
+
+/* ---------- Confirmation dialog ---------- */
+.btn--ghost {
+  background: var(--surface-2);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+.btn--ghost:hover { background: #1c2130; }
+.btn--danger {
+  background: linear-gradient(135deg, #ff97a6, #ff5d78);
+  color: #2b0710;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 8px 22px -8px rgba(255, 93, 120, 0.5);
+}
+.btn--danger:hover { filter: brightness(1.06); }
+.confirm {
+  width: min(400px, calc(100vw - 36px));
+  padding: 28px 26px 24px;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--card-grad);
+  color: var(--text);
+  box-shadow: 0 30px 80px -20px rgba(0, 0, 0, 0.9);
+  text-align: center;
+}
+.confirm[open] { animation: confirm-in 0.16s ease-out; }
+.confirm::backdrop {
+  background: rgba(3, 5, 10, 0.62);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+@keyframes confirm-in { from { opacity: 0; transform: translateY(6px) scale(0.98); } to { opacity: 1; transform: none; } }
+.confirm__icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 14px;
+  border-radius: 14px;
+  background: rgba(255, 130, 150, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(255, 130, 150, 0.35);
+  color: var(--neg);
+}
+.confirm__icon svg { width: 22px; height: 22px; }
+.confirm__title { font-size: 18px; margin-bottom: 8px; }
+.confirm__body { margin: 0 0 22px; color: var(--muted); font-size: 14px; }
+.confirm__actions { display: flex; gap: 10px; }
+.confirm__actions .btn { flex: 1; justify-content: center; }
 
 /* ---------- API key prompt ---------- */
 .connect { max-width: 480px; margin: 40px auto; padding: 36px 32px; text-align: center; }
