@@ -181,6 +181,39 @@ export interface MerchantCategory {
   category: string;
 }
 
+/** One institution login (all the accounts behind one set of bank credentials). */
+export interface InstitutionResult {
+  institution?: string;
+  userSiteId?: number;
+  accounts?: number;
+  /** refreshed | skipped | failed */
+  action?: string;
+  reason?: string | null;
+  error?: string | null;
+  lastRefreshedBefore?: string | null;
+  lastRefreshedAfter?: string | null;
+  /** True once Empower finished; false if it was still updating when the wait ended. */
+  completed?: boolean | null;
+  aggregationError?: string | null;
+}
+
+/** `GET /refresh-institutions` (and the body of its POST responses). */
+export interface InstitutionRefreshStatus {
+  enabled?: boolean;
+  dailyAt?: string | null;
+  intervalMinutes?: number;
+  running?: boolean;
+  /** schedule | startup | manual */
+  trigger?: string | null;
+  lastStarted?: string | null;
+  lastFinished?: string | null;
+  lastCompleted?: string | null;
+  nextScheduledRun?: string | null;
+  outcome?: string | null;
+  error?: string | null;
+  institutions?: InstitutionResult[];
+}
+
 export interface ApiErrorBody {
   error: string;
   httpStatus?: number | null;

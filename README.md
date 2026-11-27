@@ -33,8 +33,24 @@ The deployed site calls `https://beefjerky67.asuscomm.com:44300` (override at bu
 The page asks for an API key (from the service's `data/api-keys.txt`) and sends it as
 `X-API-Key`. The key is **never in the code or the repo**: anything in a GitHub Pages build is
 public. It's stored only in the browser you enter it in ("Remember on this device" uses
-localStorage; unticked, it lasts until the tab closes). **Forget API key** (sidebar, or the
-top-right icon on mobile) removes it. If the service rejects a key, the page clears it and asks again.
+localStorage; unticked, it lasts until the tab closes). **Settings → Forget API key** (the cog at
+the top of the sidebar, or top-right on mobile) removes it after a confirmation. If the service
+rejects a key, the page clears it and asks again.
+
+### Settings
+
+The cog button opens Settings (`#/settings`):
+
+- **Reload data** re-reads the files the service has saved (no Empower call). The service updates
+  them every 15 minutes on its own.
+- **Refresh institutions** calls `POST /refresh-institutions` (add `?force=true` with the **Force
+  refresh** box to include logins refreshed in the last hour). It asks Empower to pull new data from
+  every bank and brokerage, then re-fetches every dataset, in the background. The status panel
+  shows the last run (`GET /refresh-institutions`): state, outcome, times, schedule and each
+  institution's result. **Check status** re-reads it; while a run is going the panel re-checks every
+  5 seconds and reloads the data when it finishes. A `409` (a run already in progress) shows that
+  run's progress instead.
+- **Forget API key** removes the key from this browser, after a confirmation.
 
 Note: every Pages site under `https://<user>.github.io` shares one origin, so your other Pages
 sites could read a remembered key. Untick "Remember" if that matters.
@@ -73,7 +89,7 @@ file covers. It's a file read on the service, not an Empower call, so it's fast 
 when the Empower session has ended.
 
 The file is read when you open the Investments panel, reused for 5 minutes, re-read with the
-5-minute polling while the panel is open, and re-read on Refresh. Trend data is held **in memory
+5-minute polling while the panel is open, and re-read on Reload data. Trend data is held **in memory
 only**, for the open tab. It's never written to browser storage, the repo, GitHub or the service,
 and it's dropped when you forget the API key.
 
@@ -144,7 +160,7 @@ Each spending transaction lands in one slice, checked in this order:
    error shown. The Spending screen confirms how many transactions moved, with **Undo**, and lists
    all your merchant categories under the chart to change or remove (a name that isn't one of the
    six, set by another client, is listed but doesn't change the chart). Transactions without a
-   merchant ID can't be assigned. The list is re-read every 5 minutes and on Refresh. Rules saved
+   merchant ID can't be assigned. The list is re-read every 5 minutes and on Reload data. Rules saved
    in the browser by the previous version are moved to the service once, matched to merchants
    through your transactions.
 1. **Subscriptions:** charges belonging to a detected subscription (see below), including ones
@@ -197,7 +213,7 @@ covers 12 months, a yearly subscription is only found if both renewals fall insi
 ```
 src/
   api.ts        API client (X-API-Key; saved summary, performance, netWorthHistory, transactions,
-                categories, cashFlowHistory; merchant categories GET/PUT/DELETE)
+                categories, cashFlowHistory; merchant categories GET/PUT/DELETE; refresh-institutions)
   auth.ts       Stores the API key in this browser only
   types.ts      Types for the API's summary and performance datasets
   dashboard.ts  Views: net worth, category tiles, account panels, trend pills, key prompt, errors
@@ -210,9 +226,11 @@ src/
   spending.ts   Spending slices, periods, totals, donut and legend
   rules.ts      Your merchant categories (by merchantId), saved on the service
   trends.ts     24h / 90-day investment trends from the saved performance file, in-memory cache
-  main.ts       App shell, nav, key prompt flow, refresh + 5-minute polling, routing + screen transitions
+  settings.ts   Settings screen: reload data, refresh institutions + status panel, forget API key
+  confirm.ts    Themed confirmation dialog (native <dialog>)
+  main.ts       App shell, nav, key prompt flow, reload + 5-minute polling, routing + screen transitions
   config.ts     Personal settings (emergency fund account and monthly expenses)
   format.ts     Currency, percent and relative-time formatting
   icons.ts      Inline SVG icons
-  styles.css    Theme (dark slate, mint accent) and responsive layout
+  styles.css    Theme (deep navy, glass-edged panels, electric blue accent) and responsive layout
 ```

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Empower Local Service API
-  version: 1.4.0
+  version: 1.5.0
   description: |
     Access to one person's Empower (Personal Dashboard) financial data, collected by a Windows
     service running on their own PC. The Empower data is read-only. The only thing clients can
@@ -43,6 +43,17 @@ info:
     - `POST /refresh`: re-fetches and saves all 13 datasets, one after another. It can take up to
       a minute. Only use it when the data must be newer than the last 15-minute run.
     - `POST /jobs/{name}/run`: the same, for one dataset.
+    - `POST /refresh-institutions`: asks Empower to pull fresh data from the user's banks and
+      brokerages (as logging in to the dashboard does), then re-fetches every dataset. It contacts
+      every bank, so call it only when the user asks for up-to-the-minute balances. The service
+      already runs it on a schedule (daily at 6:00 AM by default).
+
+    ## Data freshness
+    A dataset's `savedAt` says when the service last asked Empower; it doesn't say when Empower last
+    heard from the bank. For that, use `accounts` → `spData.accounts[].lastRefreshed` (epoch ms)
+    and `aggregating` (true while Empower is updating that account). An account with an
+    `aggregationError` (e.g. `MFA_REQUIRED`) stops updating until the user fixes it in the
+    Empower dashboard; tell the user.
 
     ## Session health
     The service depends on a logged-in Empower session that the owner renews by hand.
@@ -239,6 +250,61 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/JobStatus" }
+
+  /refresh-institutions:
+    post:
+      tags: [control]
+      summary: Make Empower pull fresh data from every bank, then re-fetch all datasets
+      description: |
+        Empower only pulls new balances and transactions from the user's institutions when they log
+        in (plus its own occasional updates). This asks it to refresh each institution login (one
+        `newaccount/refreshAccounts` per login, the call behind the dashboard's refresh button),
+        waits until Empower reports each one finished (up to 5 minutes), then re-fetches and saves
+        every dataset.
+
+        Skipped automatically: logins that need the user (`MFA_REQUIRED` or a reconnect prompt),
+        logins Empower is already refreshing, and logins refreshed in the last hour (unless
+        `force=true`). By default it starts in the background and answers `202` at once; poll
+        `GET /refresh-institutions` until `running` is false. Only one run at a time: `409` while
+        one is in progress.
+      operationId: refreshInstitutions
+      parameters:
+        - name: wait
+          in: query
+          schema: { type: boolean, default: false }
+          description: Wait for the whole run (can take several minutes) and return the final status with 200.
+        - name: force
+          in: query
+          schema: { type: boolean, default: false }
+          description: Also refresh logins Empower refreshed in the last hour.
+      responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "200":
+          description: (wait=true) The run finished. Check `error` and each institution's `action`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InstitutionRefreshStatus" }
+        "202":
+          description: Started in the background.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InstitutionRefreshStatus" }
+        "409":
+          description: A run is already in progress (status of that run).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InstitutionRefreshStatus" }
+    get:
+      tags: [control]
+      summary: Progress or result of the last institution refresh
+      operationId: getInstitutionRefreshStatus
+      responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "200":
+          description: Current status. Doesn't call Empower.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InstitutionRefreshStatus" }
 
   /merchant-categories:
     get:
@@ -487,6 +553,49 @@ components:
         lastError: { type: [string, "null"] }
         consecutiveFailures: { type: integer }
         nextRun: { type: [string, "null"], format: date-time }
+
+    InstitutionRefreshStatus:
+      type: object
+      properties:
+        enabled: { type: boolean, description: "Whether the scheduled run is on." }
+        dailyAt: { type: [string, "null"], example: "06:00", description: "Local time of the daily run. Null when it runs every intervalMinutes instead." }
+        intervalMinutes: { type: integer, description: "Used only when dailyAt is null." }
+        running: { type: boolean }
+        trigger:
+          type: [string, "null"]
+          enum: [schedule, startup, manual, null]
+          description: "`startup` = catch-up run after a restart because the last refresh was a day old or more."
+        lastStarted: { type: [string, "null"], format: date-time }
+        lastFinished: { type: [string, "null"], format: date-time }
+        lastCompleted: { type: [string, "null"], format: date-time, description: "When the last run that didn't fail as a whole finished. Kept across restarts." }
+        nextScheduledRun: { type: [string, "null"], format: date-time }
+        outcome: { type: [string, "null"], description: "One-line summary of the last run." }
+        error:
+          type: [string, "null"]
+          description: Set when the run couldn't work at all, e.g. the Empower session has expired.
+        institutions:
+          type: array
+          items: { $ref: "#/components/schemas/InstitutionResult" }
+
+    InstitutionResult:
+      type: object
+      description: One institution login (all the accounts behind one set of bank credentials).
+      properties:
+        institution: { type: string, example: Fidelity }
+        userSiteId: { type: integer, description: "Matches accounts[].userSiteId." }
+        accounts: { type: integer, description: "Accounts behind this login." }
+        action:
+          type: string
+          enum: [refreshed, skipped, failed]
+          description: "`refreshed` = refresh requested; `failed` = the request itself failed (see `error`)."
+        reason: { type: [string, "null"], description: "Why it was skipped." }
+        error: { type: [string, "null"] }
+        lastRefreshedBefore: { type: [string, "null"], format: date-time, description: "Oldest lastRefreshed of its accounts before the run." }
+        lastRefreshedAfter: { type: [string, "null"], format: date-time, description: "Oldest lastRefreshed of its accounts after the run." }
+        completed:
+          type: [boolean, "null"]
+          description: True once Empower finished (new lastRefreshed or an error); false if it was still updating when the wait ended.
+        aggregationError: { type: [string, "null"], example: MFA_REQUIRED, description: "Empower's error for this login after the run, if any." }
 
     CertificateInfo:
       type: object

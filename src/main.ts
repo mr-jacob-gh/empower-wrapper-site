@@ -1,7 +1,17 @@
 import "./styles.css";
-import { API_BASE, ApiError, getCategories, getNetWorthHistory, getSummary, getTransactions } from "./api";
+import {
+  API_BASE,
+  ApiError,
+  getCategories,
+  getInstitutionRefreshStatus,
+  getNetWorthHistory,
+  getSummary,
+  getTransactions,
+  startInstitutionRefresh,
+} from "./api";
 import { clearApiKey, getApiKey, setApiKey } from "./auth";
 import { confirmDialog } from "./confirm";
+import { riStatusHtml, settingsShellHtml, type RiView } from "./settings";
 import {
   applySelection,
   applyTrends,
@@ -56,7 +66,7 @@ import { mountFilterBox, type FilterState } from "./filterbox";
 import { dateTime, esc, timeAgo } from "./format";
 import { icons } from "./icons";
 import { clearTrends, ensureTrends, trendState } from "./trends";
-import type { Summary, Transaction } from "./types";
+import type { InstitutionRefreshStatus, Summary, Transaction } from "./types";
 
 /** The service saves every 15 minutes; flag data older than this as stale. */
 const STALE_AFTER_MS = 30 * 60 * 1000;
@@ -69,7 +79,10 @@ const root = document.querySelector<HTMLDivElement>("#app")!;
 root.innerHTML = `
   <div class="app">
     <aside class="sidebar">
-      <div class="brand"><span class="brand__mark">${icons.logo}</span><span>Empower</span></div>
+      <div class="sidebar__head">
+        <div class="brand"><span class="brand__mark">${icons.logo}</span><span>Empower</span></div>
+        <a class="icon-btn" href="#/settings" data-nav="settings" aria-label="Settings" title="Settings">${icons.settings}</a>
+      </div>
       <nav class="nav" aria-label="Main">
         <a class="nav__item is-active" href="#" data-nav="dashboard" aria-current="page">${icons.dashboard}<span>Summary</span></a>
         <a class="nav__item" href="#/spending" data-nav="spending">${icons.pie}<span>Spending</span></a>
@@ -78,7 +91,6 @@ root.innerHTML = `
       <div class="sidebar__foot">
         <div class="muted small">Service</div>
         <code class="small">${esc(API_BASE)}</code>
-        <button class="link-btn small" data-action="forget-key">${icons.logout}<span>Forget API key</span></button>
       </div>
     </aside>
 
@@ -90,8 +102,7 @@ root.innerHTML = `
         <a class="topnav__item" href="#/subscriptions" data-nav="subscriptions">Subscriptions</a>
       </nav>
       <div class="topbar__actions">
-        <button class="icon-btn" data-action="forget-key" aria-label="Forget API key" title="Forget API key">${icons.logout}</button>
-        <button class="icon-btn" data-action="reload" aria-label="Refresh">${icons.refresh}</button>
+        <a class="icon-btn" href="#/settings" data-nav="settings" aria-label="Settings" title="Settings">${icons.settings}</a>
       </div>
     </header>
 
@@ -101,13 +112,13 @@ root.innerHTML = `
           <div class="page-head page-head--inline">
             <h1>Summary</h1>
             <div id="freshness" class="freshness"></div>
-            <button class="btn btn--accent page-head__btn" data-action="reload">${icons.refresh}<span>Refresh</span></button>
           </div>
           <div id="content"></div>
         </div>
         <div class="screen" data-screen="account" id="account" hidden></div>
         <div class="screen" data-screen="subscriptions" id="subscriptions" hidden></div>
         <div class="screen" data-screen="spending" id="spending" hidden></div>
+        <div class="screen" data-screen="settings" id="settings" hidden></div>
       </div>
     </main>
   </div>
@@ -118,6 +129,7 @@ const dashboardScreen = root.querySelector<HTMLDivElement>("[data-screen='dashbo
 const accountScreen = root.querySelector<HTMLDivElement>("#account")!;
 const subsScreen = root.querySelector<HTMLDivElement>("#subscriptions")!;
 const spendScreen = root.querySelector<HTMLDivElement>("#spending")!;
+const settingsScreen = root.querySelector<HTMLDivElement>("#settings")!;
 const content = root.querySelector<HTMLDivElement>("#content")!;
 const freshness = root.querySelector<HTMLDivElement>("#freshness")!;
 
@@ -145,12 +157,16 @@ function clearData(): void {
 function renderFreshness(): void {
   if (!savedAt) {
     freshness.innerHTML = "";
+    const settingsMeta = settingsScreen.querySelector<HTMLElement>("[data-role='settings-freshness']");
+    if (settingsMeta) settingsMeta.innerHTML = "";
     return;
   }
   const stale = Date.now() - savedAt.getTime() > STALE_AFTER_MS;
   freshness.innerHTML = stale
     ? `<span class="chip chip--warn" title="${esc(dateTime(savedAt))}">${icons.alert}<span>Stale · last fetched ${esc(timeAgo(savedAt))}</span></span>`
     : `<span class="chip" title="${esc(dateTime(savedAt))}"><i class="dot"></i><span>Last fetched ${esc(timeAgo(savedAt))}</span></span>`;
+  const settingsMeta = settingsScreen.querySelector<HTMLElement>("[data-role='settings-freshness']");
+  if (settingsMeta) settingsMeta.innerHTML = freshness.innerHTML;
 }
 
 function showKeyForm(problem?: string): void {
@@ -237,7 +253,7 @@ function loadTrends(force: boolean): void {
 
 // ---------- Account screen ----------
 
-type ScreenName = "dashboard" | "account" | "subscriptions" | "spending";
+type ScreenName = "dashboard" | "account" | "subscriptions" | "spending" | "settings";
 let current: ScreenName = "dashboard";
 /** What the account screen shows; kept across re-renders of the same account. */
 let accountUi: {
@@ -313,8 +329,18 @@ function setSpendingUrl(range: RangeKey, slice: SliceKey | null): void {
   appliedHash = location.hash;
 }
 
+// Settings URL: #/settings
+const SETTINGS_ROUTE = /^#\/settings\/?$/;
+const isSettingsRoute = (): boolean => SETTINGS_ROUTE.test(location.hash);
+
 function updateNav(): void {
-  const page = isSubscriptionsRoute() ? "subscriptions" : isSpendingRoute() ? "spending" : "dashboard";
+  const page = isSubscriptionsRoute()
+    ? "subscriptions"
+    : isSpendingRoute()
+      ? "spending"
+      : isSettingsRoute()
+        ? "settings"
+        : "dashboard";
   for (const a of root.querySelectorAll<HTMLElement>("[data-nav]")) {
     const on = a.dataset.nav === page;
     a.classList.toggle("is-active", on);
@@ -335,6 +361,15 @@ function applyRoute(animate: boolean): void {
   if (isSpendingRoute()) {
     renderSpendingScreen();
     if (current !== "spending") void show("spending", animate);
+    return;
+  }
+  if (isSettingsRoute()) {
+    const entering = current !== "settings";
+    renderSettingsScreen();
+    if (entering) {
+      void show("settings", animate);
+      void checkRiStatus(false);
+    }
     return;
   }
   const id = routeAccountId();
@@ -504,7 +539,7 @@ const running: Animation[] = [];
 const isMobile = () => matchMedia("(max-width: 760px)").matches;
 const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 const screenEl = (name: ScreenName) =>
-  ({ dashboard: dashboardScreen, account: accountScreen, subscriptions: subsScreen, spending: spendScreen })[name];
+  ({ dashboard: dashboardScreen, account: accountScreen, subscriptions: subsScreen, spending: spendScreen, settings: settingsScreen })[name];
 /** Opening an account and going back slide on phones; switching pages fades. */
 const isDrillDown = (a: ScreenName, b: ScreenName): boolean =>
   (a === "dashboard" && b === "account") || (a === "account" && b === "dashboard");
@@ -574,7 +609,7 @@ async function show(target: ScreenName, animate: boolean): Promise<void> {
 
 /** Move focus for keyboard and screen-reader users after a screen change. */
 function focusAfter(target: ScreenName): void {
-  if (target === "subscriptions" || target === "spending") {
+  if (target === "subscriptions" || target === "spending" || target === "settings") {
     screenEl(target).querySelector<HTMLElement>("h1")?.focus({ preventScroll: true });
   } else if (target === "account") {
     accountScreen.querySelector<HTMLElement>("[data-action='back']")?.focus({ preventScroll: true });
@@ -589,6 +624,127 @@ function leaveToDashboardNow(): void {
   appliedHash = location.hash;
   updateNav();
   if (current !== "dashboard") void show("dashboard", false);
+}
+
+// ---------- Settings screen ----------
+
+/** How often to re-check while an institution refresh is running. */
+const RI_POLL_MS = 5000;
+const ri: RiView = { status: null, checkedAt: null, busy: null, problem: null, note: null, instOpen: false };
+let riTimer = 0;
+let riChecking = false;
+let riWasRunning = false;
+
+function renderSettingsScreen(): void {
+  document.title = `Settings · ${APP_TITLE}`;
+  if (!settingsScreen.querySelector(".settings-screen")) settingsScreen.innerHTML = settingsShellHtml(API_BASE);
+  renderFreshness();
+  drawRi();
+}
+
+function drawRi(): void {
+  const box = settingsScreen.querySelector<HTMLElement>("[data-role='ri-status']");
+  if (!box) return;
+  box.innerHTML = riStatusHtml(ri);
+  const running = Boolean(ri.status?.running);
+  const start = settingsScreen.querySelector<HTMLButtonElement>("[data-action='refresh-institutions']");
+  if (start) {
+    start.disabled = running || ri.busy !== null;
+    start.querySelector("span")!.textContent =
+      ri.busy === "start" ? "Starting…" : running ? "Refreshing…" : "Refresh institutions";
+  }
+  const check = settingsScreen.querySelector<HTMLButtonElement>("[data-action='check-ri-status']");
+  if (check) {
+    check.disabled = ri.busy !== null;
+    check.querySelector("span")!.textContent = ri.busy === "check" ? "Checking…" : "Check status";
+  }
+}
+
+function riProblem(err: unknown, what: string): string {
+  if (err instanceof ApiError && err.kind === "not-found") {
+    return "This service doesn't support refreshing institutions yet. Update the Empower Local Service (API 1.5 or later).";
+  }
+  if (err instanceof ApiError && err.kind === "network") return `${what}: couldn't reach the service.`;
+  return `${what}: ${err instanceof Error ? err.message : String(err)}`;
+}
+
+/** Keep checking while a run is in progress and Settings is open. */
+function scheduleRiPoll(): void {
+  window.clearTimeout(riTimer);
+  if (ri.status?.running && current === "settings") riTimer = window.setTimeout(() => void checkRiStatus(true), RI_POLL_MS);
+}
+
+function applyRiStatus(status: InstitutionRefreshStatus): void {
+  ri.status = status;
+  ri.checkedAt = new Date();
+  const running = Boolean(status.running);
+  if (riWasRunning && !running) {
+    // The run re-fetched every dataset: show the new numbers.
+    ri.note = status.error ? null : "Refresh finished. Your data has been reloaded.";
+    reloadData();
+  }
+  riWasRunning = running;
+}
+
+/** `quiet`: an automatic poll, so don't put the buttons in their busy state. */
+async function checkRiStatus(quiet: boolean): Promise<void> {
+  if (riChecking || !getApiKey()) return;
+  riChecking = true;
+  if (!quiet) {
+    ri.busy = "check";
+    ri.note = null;
+    drawRi();
+  }
+  try {
+    const { data } = await getInstitutionRefreshStatus();
+    ri.problem = null;
+    applyRiStatus(data ?? {});
+  } catch (err) {
+    if (handleKeyError(err)) return;
+    ri.problem = riProblem(err, "Couldn't check the status");
+  } finally {
+    riChecking = false;
+    if (!quiet) ri.busy = null;
+    drawRi();
+    scheduleRiPoll();
+  }
+}
+
+async function startRi(): Promise<void> {
+  if (ri.busy || ri.status?.running) return;
+  const force = settingsScreen.querySelector<HTMLInputElement>("[data-role='ri-force']")?.checked ?? false;
+  ri.busy = "start";
+  ri.problem = null;
+  ri.note = null;
+  drawRi();
+  try {
+    const res = await startInstitutionRefresh(force);
+    ri.note =
+      res.status === 409
+        ? "A refresh was already running, so another wasn't started. Showing its progress."
+        : `Refresh started${force ? " (forced)" : ""}. This panel updates while it runs.`;
+    riWasRunning = true;
+    applyRiStatus(res.data ?? { running: true });
+  } catch (err) {
+    if (handleKeyError(err)) return;
+    ri.problem = riProblem(err, "Couldn't start the refresh");
+  } finally {
+    ri.busy = null;
+    drawRi();
+    scheduleRiPoll();
+  }
+}
+
+/** Re-read the saved data (no Empower call) and make other screens fetch theirs again. */
+function reloadData(): void {
+  void load(false);
+  if (selected === "investments") loadTrends(true);
+  if (current !== "dashboard") {
+    balanceHistory.clear();
+    transactions.clear();
+    // Pick up category changes made on another device.
+    if (current !== "subscriptions") void loadRules(true).catch(() => {});
+  }
 }
 
 // ---------- Subscriptions screen ----------
@@ -856,14 +1012,19 @@ root.addEventListener("click", (e) => {
 
   if (el.closest("[data-action='reload']")) {
     e.preventDefault();
-    void load(false);
-    if (selected === "investments") loadTrends(true);
-    if (current === "account" || current === "subscriptions" || current === "spending") {
-      balanceHistory.clear();
-      transactions.clear();
-      // Pick up category changes made on another device.
-      if (current !== "subscriptions") void loadRules(true).catch(() => {});
-    }
+    reloadData();
+    return;
+  }
+
+  if (el.closest("[data-action='refresh-institutions']")) {
+    e.preventDefault();
+    void startRi();
+    return;
+  }
+
+  if (el.closest("[data-action='check-ri-status']")) {
+    e.preventDefault();
+    void checkRiStatus(false);
     return;
   }
 
@@ -1040,6 +1201,17 @@ function setFilter(filter: FilterState): void {
   drawTransactions();
 }
 
+// Settings: remember whether the institutions panel is open across status redraws.
+// ("toggle" doesn't bubble, so listen in the capture phase.)
+root.addEventListener(
+  "toggle",
+  (e) => {
+    const panel = e.target as Element;
+    if (panel instanceof HTMLDetailsElement && panel.dataset.role === "ri-insts") ri.instOpen = panel.open;
+  },
+  true,
+);
+
 // Spending category pickers: in a transaction's details, and in the rules list.
 root.addEventListener("change", (e) => {
   const target = e.target as Element;
@@ -1083,4 +1255,4 @@ document.addEventListener("visibilitychange", () => {
 // Subscriptions page doesn't need the summary, so it opens straight away.
 updateNav();
 void load(true);
-if ((isSubscriptionsRoute() || isSpendingRoute()) && getApiKey()) applyRoute(false);
+if ((isSubscriptionsRoute() || isSpendingRoute() || isSettingsRoute()) && getApiKey()) applyRoute(false);

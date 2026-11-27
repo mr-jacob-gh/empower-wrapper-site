@@ -2,6 +2,7 @@ import type {
   ApiErrorBody,
   CashFlowHistory,
   Categories,
+  InstitutionRefreshStatus,
   MerchantCategory,
   NetWorthHistory,
   Performance,
@@ -37,14 +38,25 @@ export interface Fetched<T> {
   data: T;
   /** When the service saved the file (from Last-Modified), if known. */
   savedAt: Date | null;
+  /** HTTP status of the response. */
+  status: number;
 }
 
 function getJson<T>(path: string, signal?: AbortSignal): Promise<Fetched<T>> {
   return request<T>("GET", path, undefined, signal);
 }
 
-/** Any call to the service. `body` is sent as JSON. A 204 response gives `data: null`. */
-async function request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<Fetched<T>> {
+/**
+ * Any call to the service. `body` is sent as JSON. A 204 response gives `data: null`.
+ * Non-2xx statuses listed in `accept` are returned (with their JSON body) instead of thrown.
+ */
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  signal?: AbortSignal,
+  accept: readonly number[] = [],
+): Promise<Fetched<T>> {
   const key = getApiKey();
   if (!key) throw new ApiError("No API key entered.", "no-key");
 
@@ -65,7 +77,7 @@ async function request<T>(method: string, path: string, body?: unknown, signal?:
     throw new ApiError(`Couldn't reach the service at ${API_BASE}.`, "network");
   }
 
-  if (!res.ok) {
+  if (!res.ok && !accept.includes(res.status)) {
     let message = `HTTP ${res.status}`;
     try {
       const body = (await res.json()) as Partial<ApiErrorBody>;
@@ -83,6 +95,7 @@ async function request<T>(method: string, path: string, body?: unknown, signal?:
   return {
     data: (res.status === 204 ? null : await res.json()) as T,
     savedAt: savedAt && !Number.isNaN(savedAt.getTime()) ? savedAt : null,
+    status: res.status,
   };
 }
 
@@ -117,6 +130,23 @@ export function getCashFlowHistory(signal?: AbortSignal): Promise<Fetched<CashFl
 /** The saved `categories` dataset: lookup table for transactions[].categoryId. No Empower call. */
 export function getCategories(signal?: AbortSignal): Promise<Fetched<Categories>> {
   return getJson<Categories>("/data/categories", signal);
+}
+
+// ---------- Institution refresh (this one does reach Empower and every bank) ----------
+
+/**
+ * Ask Empower to pull fresh data from every institution, then re-fetch all datasets.
+ * Starts in the background: `202` with the new status, or `409` with the status of the
+ * run already in progress (both resolve; check `status`).
+ * `force`: also refresh logins Empower refreshed in the last hour.
+ */
+export function startInstitutionRefresh(force: boolean): Promise<Fetched<InstitutionRefreshStatus>> {
+  return request<InstitutionRefreshStatus>("POST", `/refresh-institutions${force ? "?force=true" : ""}`, undefined, undefined, [409]);
+}
+
+/** Progress or result of the last institution refresh. Doesn't call Empower. */
+export function getInstitutionRefreshStatus(signal?: AbortSignal): Promise<Fetched<InstitutionRefreshStatus>> {
+  return getJson<InstitutionRefreshStatus>("/refresh-institutions", signal);
 }
 
 // ---------- Your merchant categories (the only thing the app saves on the service) ----------
