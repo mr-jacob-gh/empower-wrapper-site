@@ -3,6 +3,7 @@ import { esc, money, moneyCents, moneyParts, percent, shortDate, signedMoney, si
 import { icons } from "./icons";
 import { EMERGENCY_FUND } from "./config";
 import type { Change, TrendState } from "./trends";
+import { needsReconnect, type Reconnect } from "./health";
 
 // ---------- Categories (one per tile) and account groups ----------
 
@@ -159,16 +160,25 @@ function emergencyFundBadge(balance: number): string {
     </div>`;
 }
 
+/** "⚠ Reconnect in Empower" for an account Empower can't update until the user reconnects it. */
+export function reconnectFlagHtml(r: Reconnect): string {
+  const tip = `Empower can't update this account until you reconnect it in Empower.${r.label ? ` ${r.label}.` : ""}`;
+  return `<span class="reconnect" title="${esc(tip)}"><span class="reconnect__icon" aria-hidden="true">${icons.alert}</span>Reconnect in Empower</span>`;
+}
+
 function accountRow({ account: a, isEmpower }: Row, info: GroupInfo): string {
   const bal = num(a.balance);
   const signed = info.liability ? -Math.abs(bal) : bal;
   const synced = a.lastRefreshed ? syncedHtml(a.lastRefreshed, `Synced ${timeAgo(new Date(a.lastRefreshed))}`) : "";
-  const sub = [a.firmName ? esc(a.firmName) : "", synced].filter(Boolean).join(" · ");
+  const reconnect = needsReconnect(a.userAccountId);
+  const sub = [reconnect ? reconnectFlagHtml(reconnect) : "", a.firmName ? esc(a.firmName) : "", synced].filter(Boolean).join(" · ");
   const fund = a.userAccountId === EMERGENCY_FUND.userAccountId ? emergencyFundBadge(bal) : "";
   // Investment-type rows get a slot that applyTrends() fills in.
   const detail = opensDetail(info, a);
   const trend = detail && hasTrends(info) ? `<div class="acct__trends" data-trend-id="${a.userAccountId}"></div>` : "";
-  const mods = [fund && "acct--fund", trend && "acct--trend", detail && "acct--link"].filter(Boolean).join(" ");
+  const mods = [fund && "acct--fund", trend && "acct--trend", detail && "acct--link", reconnect && "acct--reconnect"]
+    .filter(Boolean)
+    .join(" ");
   const name = esc(a.name || a.originalName || "Account");
   // The whole row opens the account (main.ts); the link keeps it reachable by keyboard.
   const title = detail ? `<a class="acct__open" href="#/account/${a.userAccountId}">${name}</a>` : name;

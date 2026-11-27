@@ -10,6 +10,7 @@ import { dateTime, esc, mediumDate, moneyCents, moneyParts, monthYear, shortDate
 import { icons } from "./icons";
 import { hasTrends, signedBalance, syncedHtml, type GroupInfo, type Row } from "./dashboard";
 import { dayNumber, mountLineChart, type Point } from "./chart";
+import { needsReconnect } from "./health";
 
 export type ChartRange = "24h" | "90d";
 export const PAGE_SIZE = 10;
@@ -86,8 +87,20 @@ export function heroHtml({ account: a, isEmpower, info }: Found): string {
     ["Available credit", limit !== null ? esc(moneyCents(Math.max(0, limit - Math.abs(balance)))) : ""],
     ["Last synced", synced ? syncedHtml(a.lastRefreshed, `${dateTime(synced)} (${timeAgo(synced)})`) : ""],
   ];
+  const reconnect = needsReconnect(a.userAccountId);
+  const note = reconnect
+    ? `<div class="reconnect-note" role="note">
+        ${icons.alert}
+        <div>
+          <strong>Reconnect this account in Empower</strong>
+          <span>Empower can't fetch new balances or transactions for it until you do, so what's shown here may be out
+            of date.${reconnect.label ? ` ${esc(reconnect.label)}.` : ""}</span>
+          ${reconnect.message ? `<span class="reconnect-note__msg">Empower says: “${esc(reconnect.message)}”</span>` : ""}
+        </div>
+      </div>`
+    : "";
   return `
-  <section class="card acct-hero" data-role="hero">
+  <section class="card acct-hero${reconnect ? " acct-hero--reconnect" : ""}" data-role="hero">
     <div class="acct-hero__top">
       <div class="acct__icon">${info.icon}</div>
       <div class="acct-hero__titles">
@@ -97,6 +110,7 @@ export function heroHtml({ account: a, isEmpower, info }: Found): string {
     </div>
     <div class="acct-hero__bal${balance < 0 ? " is-neg" : ""}">${esc(whole)}<span class="acct-hero__cents">${esc(cents)}</span></div>
     ${hasTrends(info) ? `<div class="acct__trends" data-trend-id="${a.userAccountId}"></div>` : ""}
+    ${note}
     <dl class="details">
       ${details
         .filter(([, v]) => v)

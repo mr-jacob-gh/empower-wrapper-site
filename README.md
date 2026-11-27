@@ -100,6 +100,14 @@ Wherever an account's sync time is shown (the "Synced … ago" line on dashboard
 hasn't synced that account for more than 24 hours (`lastRefreshed` in the summary). Hovering or a
 screen reader gives "Not synced in over 24 hours".
 
+Accounts Empower can't update until you reconnect them get an amber **Reconnect in Empower** flag
+on their dashboard row (and an amber account icon), and a note on the account screen with the reason
+and Empower's own message. This comes from the saved `accounts` dataset (`/data/accounts`, read with
+the summary): an account needs reconnecting when it has an `aggregationError` (e.g.
+`{"type": "MFA_REQUIRED"}`), `nextAction.nextActionLinkType` is `"RECONNECT"`, or
+`nextAction.aggregationErrorType` is anything other than `"NO_ERROR"`. If that file can't be read,
+the dashboard still shows, just without the flags.
+
 ## Account screen
 
 Selecting any account under the Cash, Investments, Credit cards or Loans tiles (anywhere on its
@@ -212,8 +220,9 @@ covers 12 months, a yearly subscription is only found if both renewals fall insi
 
 ```
 src/
-  api.ts        API client (X-API-Key; saved summary, performance, netWorthHistory, transactions,
+  api.ts        API client (X-API-Key; saved summary, accounts, performance, netWorthHistory, transactions,
                 categories, cashFlowHistory; merchant categories GET/PUT/DELETE; refresh-institutions)
+  health.ts     Which accounts need reconnecting in Empower (from the accounts dataset)
   auth.ts       Stores the API key in this browser only
   types.ts      Types for the API's summary and performance datasets
   dashboard.ts  Views: net worth, category tiles, account panels, trend pills, key prompt, errors

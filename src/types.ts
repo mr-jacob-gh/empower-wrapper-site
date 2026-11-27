@@ -53,6 +53,29 @@ export interface Summary {
   isDelegate?: boolean;
 }
 
+/** An account in the full `accounts` dataset: adds Empower's aggregation (connection) details. */
+export interface AccountDetail extends Account {
+  /** Null on healthy accounts; e.g. `{ type: "MFA_REQUIRED", tags: ["UAR", "MFA_REQUIRED"] }`. */
+  aggregationError?: { type?: string; tags?: string[] } | string | null;
+  nextAction?: {
+    /** "RECONNECT" when the user must reconnect; absent on healthy accounts. */
+    nextActionLinkType?: string;
+    /** e.g. "NONE", "INITIATE_REFRESH" */
+    action?: string;
+    statusMessage?: string;
+    /** "NO_ERROR" on healthy accounts. */
+    aggregationErrorType?: string;
+  } | null;
+  isRefetchTransactionEligible?: boolean;
+}
+
+/** `GET /data/accounts`: every account with full detail. */
+export interface Accounts {
+  spData?: {
+    accounts?: AccountDetail[];
+  };
+}
+
 /** Per-account change over a date range (`performance.spData.accountSummaries[]`). */
 export interface AccountSummary {
   userAccountId?: number;

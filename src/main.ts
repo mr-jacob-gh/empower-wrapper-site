@@ -2,6 +2,7 @@ import "./styles.css";
 import {
   API_BASE,
   ApiError,
+  getAccounts,
   getCategories,
   getInstitutionRefreshStatus,
   getNetWorthHistory,
@@ -11,6 +12,7 @@ import {
 } from "./api";
 import { clearApiKey, getApiKey, setApiKey } from "./auth";
 import { confirmDialog } from "./confirm";
+import { setAccountHealth } from "./health";
 import { riStatusHtml, settingsShellHtml, type RiView } from "./settings";
 import {
   applySelection,
@@ -147,6 +149,7 @@ const categories = cached(() => getCategories(), Number.POSITIVE_INFINITY);
 
 function clearData(): void {
   summary = null;
+  setAccountHealth(null);
   clearTrends();
   balanceHistory.clear();
   transactions.clear();
@@ -206,7 +209,13 @@ async function load(showSkeleton: boolean): Promise<void> {
   if (showSkeleton) content.innerHTML = loadingHtml();
 
   try {
-    const result = await getSummary(ctrl.signal);
+    // The accounts dataset only adds "needs reconnecting" flags: if it's missing or fails,
+    // show the summary anyway (keeping the last flags we had).
+    const [result, accounts] = await Promise.all([
+      getSummary(ctrl.signal),
+      getAccounts(ctrl.signal).catch(() => null),
+    ]);
+    if (accounts) setAccountHealth(accounts.data);
     savedAt = result.savedAt;
     summary = result.data;
     content.innerHTML = dashboardHtml(result.data);

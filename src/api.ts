@@ -1,4 +1,5 @@
 import type {
+  Accounts,
   ApiErrorBody,
   CashFlowHistory,
   Categories,
@@ -102,6 +103,11 @@ async function request<T>(
 /** The saved `summary` dataset. Reads the service's file; does not call Empower. */
 export function getSummary(signal?: AbortSignal): Promise<Fetched<Summary>> {
   return getJson<Summary>("/data/summary", signal);
+}
+
+/** The saved `accounts` dataset: full detail per account, including connection errors. No Empower call. */
+export function getAccounts(signal?: AbortSignal): Promise<Fetched<Accounts>> {
+  return getJson<Accounts>("/data/accounts", signal);
 }
 
 /**
