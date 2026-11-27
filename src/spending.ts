@@ -40,26 +40,26 @@ export interface SliceDef {
 
 /** In ring and legend order. Colours follow the slice, never its rank. */
 export const SLICES: SliceDef[] = [
-  { key: "restaurants", label: "Restaurants", color: "#338ced", categories: ["restaurants"], note: "Restaurants category" },
-  { key: "groceries", label: "Groceries/Household", color: "#e76624", categories: ["groceries"], note: "Groceries category" },
-  { key: "subscriptions", label: "Subscriptions", color: "#00a888", note: "Charges from recurring subscriptions (see Subscriptions)" },
+  { key: "restaurants", label: "Restaurants", color: "#4c9bff", categories: ["restaurants"], note: "Restaurants category" },
+  { key: "groceries", label: "Groceries/Household", color: "#ff8a4c", categories: ["groceries"], note: "Groceries category" },
+  { key: "subscriptions", label: "Subscriptions", color: "#2fd3c4", note: "Charges from recurring subscriptions (see Subscriptions)" },
   {
     key: "utilities",
     label: "Utilities",
-    color: "#d28e05",
+    color: "#f5b83d",
     categories: ["utilities", "cable/satellite", "telephone"],
     note: "Utilities, Cable/Satellite and Telephone categories",
   },
-  { key: "pets", label: "Pets", color: "#9887ef", categories: ["pets/pet care"], note: "Pets/Pet Care category" },
+  { key: "pets", label: "Pets", color: "#a98bff", categories: ["pets/pet care"], note: "Pets/Pet Care category" },
   {
     key: "fees",
     label: "Interest & Fees",
-    color: "#0aac23",
+    color: "#4ade80",
     categories: ["service charges/fees", "advisory fee"],
     debitCategories: ["interest"],
     note: "Service Charges/Fees and Advisory Fee categories, plus interest charged",
   },
-  { key: "other", label: "Other shopping", color: "#e24d8b", note: "Every other spending category" },
+  { key: "other", label: "Other shopping", color: "#e463c8", note: "Every other spending category" },
 ];
 export const isSliceKey = (s: string | null): s is SliceKey => SLICES.some((x) => x.key === s);
 
