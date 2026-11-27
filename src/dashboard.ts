@@ -4,6 +4,7 @@ import { icons } from "./icons";
 import { EMERGENCY_FUND } from "./config";
 import type { Change, TrendState } from "./trends";
 import { needsReconnect, type Reconnect } from "./health";
+import type { Dti } from "./dti";
 
 // ---------- Categories (one per tile) and account groups ----------
 
@@ -64,7 +65,11 @@ function heroCard(s: Summary): string {
     <div class="hero__split">
       <div><span>Assets</span><strong>${money(num(s.totalAsset))}</strong></div>
       <div><span>Liabilities</span><strong>${money(Math.abs(num(s.totalLiability)))}</strong></div>
+      <div class="hero__dti" data-role="dti"><span>Debt-to-income</span><strong class="hero__pending" aria-label="Loading">…</strong></div>
+      <div class="hero__dti" data-role="home"><span>Zestimate</span><strong class="hero__pending" aria-label="Loading">…</strong></div>
     </div>
+    <div class="dti-panel" id="dti-panel" data-role="dti-panel" hidden></div>
+    <div class="dti-panel home-panel" id="home-panel" data-role="home-panel" hidden></div>
   </section>`;
 }
 
@@ -305,6 +310,77 @@ function trendPill(label: string, c: Change | null | undefined, tip: string): st
 
 const loadingPill = (label: string): string =>
   `<span class="trend is-loading" aria-hidden="true"><span class="trend__label">${label}</span><span class="trend__value"></span></span>`;
+
+// ---------- Debt-to-income (filled after the summary renders) ----------
+
+export type DtiState =
+  | { kind: "loading" }
+  | { kind: "no-income" }
+  | { kind: "error"; message: string }
+  | { kind: "ready"; dti: Dti };
+
+const pct1 = new Intl.NumberFormat("en-US", { style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1 });
+
+/** "2026-08", "2026-10" -> "Aug – Oct 2026" */
+function monthSpan(months: string[]): string {
+  const label = (ym: string, year: boolean) => {
+    const [y, m] = ym.split("-").map(Number);
+    return new Date(y ?? 1970, (m ?? 1) - 1, 1).toLocaleDateString("en-US", year ? { month: "short", year: "numeric" } : { month: "short" });
+  };
+  const first = months[0];
+  const last = months[months.length - 1];
+  if (!first || !last) return "";
+  if (first === last) return label(first, true);
+  return `${label(first, first.slice(0, 4) !== last.slice(0, 4))} – ${label(last, true)}`;
+}
+
+function dtiPanelHtml(d: Dti): string {
+  const span = monthSpan(d.months);
+  const sources = d.sources.length
+    ? `<ul class="dti-panel__sources">${d.sources
+        .map(
+          (s) => `<li><span>${esc(s.name)}<small>${s.count} payment${s.count === 1 ? "" : "s"}</small></span><strong>${moneyCents(s.monthly)}/mo</strong></li>`,
+        )
+        .join("")}</ul>`
+    : `<p class="dti-panel__empty">No mortgage or loan payments found in ${esc(span)}.</p>`;
+  return `
+    <dl class="dti-panel__rows">
+      <div><dt>Monthly debt payments</dt><dd>${moneyCents(d.monthlyDebt)}</dd></div>
+      <div><dt>Monthly income</dt><dd>${d.monthlyIncome !== null ? moneyCents(d.monthlyIncome) : "—"}
+        ${d.monthlyIncome !== null ? `<small>${money(d.monthlyIncome * 12)} a year ÷ 12</small>` : ""}</dd></div>
+      <div><dt>Averaged over</dt><dd>${esc(span)}</dd></div>
+    </dl>
+    ${sources}
+    <p class="dti-panel__note">Counts payments into your linked loan, mortgage and credit card accounts, plus payments
+      from other accounts categorized as a mortgage, loan or credit card payment. Credit card payments are what you
+      actually paid, often the full statement, so this can be higher than a lender's figure, which uses the minimum
+      payment. Many lenders look for 36% or less, and 43% is a common upper limit for a mortgage. Income is from
+      Settings → Household details.</p>`;
+}
+
+/** Fill the Net worth card's debt-to-income slot and its breakdown. Call after each render and state change. */
+export function applyDti(container: ParentNode, state: DtiState, open: boolean): void {
+  const slot = container.querySelector<HTMLElement>("[data-role='dti']");
+  const panel = container.querySelector<HTMLElement>("[data-role='dti-panel']");
+  if (!slot || !panel) return;
+  const label = `<span>Debt-to-income</span>`;
+  if (state.kind === "loading") {
+    slot.innerHTML = `${label}<strong class="hero__pending" aria-label="Loading">…</strong>`;
+  } else if (state.kind === "no-income") {
+    slot.innerHTML = `${label}<a class="hero__link" href="#/settings">Add income</a>`;
+  } else if (state.kind === "error") {
+    slot.innerHTML = `${label}<strong title="${esc(state.message)}" aria-label="Unavailable: ${esc(state.message)}">—</strong>`;
+  } else {
+    const d = state.dti;
+    const value = d.ratio !== null ? pct1.format(d.ratio) : "—";
+    slot.innerHTML = `${label}<button type="button" class="hero__dti-btn" data-action="toggle-dti" aria-expanded="${open}"
+      aria-controls="dti-panel" title="How this is calculated"><strong>${esc(value)}</strong>${icons.chevronDown}</button>`;
+    panel.innerHTML = dtiPanelHtml(d);
+  }
+  const showPanel = open && state.kind === "ready";
+  panel.hidden = !showPanel;
+  slot.classList.toggle("is-open", showPanel);
+}
 
 /** Fill each investment row's trend slot from the current state. Call after each render and state change. */
 export function applyTrends(container: ParentNode, state: TrendState): void {

@@ -41,6 +41,13 @@ rejects a key, the page clears it and asks again.
 
 The cog button opens Settings (`#/settings`):
 
+- **Household details** is a form over the service's `/settings` store (`GET /settings` to fill it,
+  `PATCH /settings` to save, so other keys are left alone). It has **Household income**
+  (`householdIncome`, saved as a number, or `null` when blank) and **Addresses**
+  (`zestimateAddresses`, a list of strings; **+ Add address** adds a row, × removes one). Blank rows
+  are dropped and duplicates are refused. The service looks the addresses up daily on its own; the
+  form never calls the paid `POST /zestimate/refresh`. To add a field, add it to `FIELDS` in
+  `src/appsettings.ts`.
 - **Reload data** re-reads the files the service has saved (no Empower call). The service updates
   them every 15 minutes on its own.
 - **Refresh institutions** calls `POST /refresh-institutions` (add `?force=true` with the **Force
@@ -92,6 +99,36 @@ The file is read when you open the Investments panel, reused for 5 minutes, re-r
 5-minute polling while the panel is open, and re-read on Reload data. Trend data is held **in memory
 only**, for the open tab. It's never written to browser storage, the repo, GitHub or the service,
 and it's dropped when you forget the API key.
+
+## Debt-to-income
+
+The Net worth card shows **Debt-to-income**: average monthly debt payments ÷ monthly gross income
+(Settings → Household details → Household income, ÷ 12). Without an income it shows **Add income**,
+linking to Settings. Click the figure for the breakdown (payments by source, income, months used).
+
+Debt payments come from the saved transactions over the last 3 complete calendar months
+(`src/dti.ts`):
+
+- payments into linked loan and mortgage accounts (credits on `LOAN` / `MORTGAGE` accounts),
+- payments into linked credit cards (credits on `CREDIT_CARD` accounts in a "credit card payment"
+  category; other credits on a card are refunds and are left out), and
+- money out of other accounts in a category whose name contains "mortgage", "loan" or "credit card
+  payment" (Mortgages, Loans, Student Loans, Credit Card Payments, ...), for debts that aren't linked.
+
+A payment seen on both sides (out of checking and into the linked loan or card, same amount within
+5 days) counts once. Credit card payments are what was actually paid, often the full statement, so
+the ratio can be higher than a lender's, which uses the minimum payment.
+
+## Zestimate
+
+The Net worth card also shows **Zestimate**: the total estimated value of the addresses in Settings →
+Household details (`zestimateAddresses`), from `GET /zestimate`. That only reads the service's saved
+lookups, so it never uses APIllow quota (`src/homevalue.ts`). A home listed for sale has no Zestimate,
+so its list price is used. Click the figure for each address: value, change since the previous
+lookup, rent estimate, when it was updated, and any lookup error. Addresses not looked up yet show
+as **Pending** until the service's next daily run; addresses removed from the setting are left out.
+Without any address it shows **Add address**, linking to Settings. The value is shown for reference
+and isn't added to net worth.
 
 ## Sync warnings
 
@@ -221,8 +258,11 @@ covers 12 months, a yearly subscription is only found if both renewals fall insi
 ```
 src/
   api.ts        API client (X-API-Key; saved summary, accounts, performance, netWorthHistory, transactions,
-                categories, cashFlowHistory; merchant categories GET/PUT/DELETE; refresh-institutions)
+                categories, cashFlowHistory; merchant categories GET/PUT/DELETE; refresh-institutions;
+                settings GET/PATCH; zestimate)
   health.ts     Which accounts need reconnecting in Empower (from the accounts dataset)
+  dti.ts        Debt-to-income: monthly loan, mortgage and credit card payments ÷ household income
+  homevalue.ts  Zestimate on the Net worth card (saved lookups from GET /zestimate)
   auth.ts       Stores the API key in this browser only
   types.ts      Types for the API's summary and performance datasets
   dashboard.ts  Views: net worth, category tiles, account panels, trend pills, key prompt, errors
@@ -236,6 +276,7 @@ src/
   rules.ts      Your merchant categories (by merchantId), saved on the service
   trends.ts     24h / 90-day investment trends from the saved performance file, in-memory cache
   settings.ts   Settings screen: reload data, refresh institutions + status panel, forget API key
+  appsettings.ts Settings → Household details form (fields saved to the service's /settings)
   confirm.ts    Themed confirmation dialog (native <dialog>)
   main.ts       App shell, nav, key prompt flow, reload + 5-minute polling, routing + screen transitions
   config.ts     Personal settings (emergency fund account and monthly expenses)

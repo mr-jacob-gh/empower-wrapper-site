@@ -1,11 +1,12 @@
 openapi: 3.1.0
 info:
   title: Empower Local Service API
-  version: 1.5.0
+  version: 1.8.0
   description: |
     Access to one person's Empower (Personal Dashboard) financial data, collected by a Windows
     service running on their own PC. The Empower data is read-only. The only thing clients can
-    change is the user's own list of custom merchant categories (`/merchant-categories`).
+    change is the user's own data: custom merchant categories (`/merchant-categories`) and the web
+    app's settings (`/settings`).
 
     ## Connecting
     - **HTTPS only.** From the internet: `https://beefjerky67.asuscomm.com:44300`. On the user's
@@ -22,7 +23,7 @@ info:
       fingerprint. Do **not** disable certificate verification: that would expose the API key.
     - **Browser apps (CORS)**: only listed origins may call from a web page (currently
       `https://mr-jacob-gh.github.io`). Preflight `OPTIONS` requests need no key and allow methods
-      `GET, POST, PUT, DELETE` and headers `X-API-Key, Authorization, Content-Type`. Every response,
+      `GET, POST, PUT, PATCH, DELETE` and headers `X-API-Key, Authorization, Content-Type`. Every response,
       including 401, carries `Access-Control-Allow-Origin` for allowed origins; `X-Data-Source` and
       `X-Date-Range` are exposed to the page.
 
@@ -43,6 +44,9 @@ info:
     - `POST /refresh`: re-fetches and saves all 13 datasets, one after another. It can take up to
       a minute. Only use it when the data must be newer than the last 15-minute run.
     - `POST /jobs/{name}/run`: the same, for one dataset.
+    - `POST /zestimate/refresh`: paid APIllow lookups (one of the user's limited monthly lookups per
+      address; 50 a month on the free plan). The service already looks addresses up daily, so only
+      call it right after adding an address, when the user asks. `GET /zestimate` never calls APIllow.
     - `POST /refresh-institutions`: asks Empower to pull fresh data from the user's banks and
       brokerages (as logging in to the dashboard does), then re-fetches every dataset. It contacts
       every bank, so call it only when the user asks for up-to-the-minute balances. The service
@@ -93,6 +97,10 @@ tags:
     description: Status and on-demand fetching from Empower
   - name: merchant-categories
     description: The user's own category names for merchants, saved on the PC
+  - name: settings
+    description: Generic key/value settings saved by the web app (household income, address, ...)
+  - name: property
+    description: Property values (Zillow Zestimate) via the APIllow API
 
 paths:
   /:
@@ -471,6 +479,234 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  /settings:
+    get:
+      tags: [settings]
+      summary: Get every app setting
+      description: |
+        The web app's own settings as `[{ "key", "value" }]`, in the order they were first saved.
+        Returns `[]` when nothing has been saved. Values are returned exactly as they were sent.
+      operationId: getSettings
+      responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "200":
+          description: All settings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SettingList" }
+              example:
+                - { key: householdIncome, value: 185000 }
+                - { key: address, value: { street: "1 Main St", city: Raleigh, state: NC, zip: "27601" } }
+        "500":
+          description: The saved file can't be read. The user must fix or restore it on the PC, or replace everything with PUT.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    put:
+      tags: [settings]
+      summary: Replace every setting
+      description: Saves exactly the list sent. Keys not in it are removed. Nothing is saved if any entry is invalid.
+      operationId: replaceSettings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SettingList" }
+      responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "200":
+          description: Saved; returns the list as saved.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SettingList" }
+        "400":
+          description: Bad JSON, a missing/invalid key, a missing value, or a duplicate key. The message says which.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "Entry 1: key \"a\" appears more than once." }
+    patch:
+      tags: [settings]
+      summary: Add or change several settings
+      description: |
+        Adds each setting sent (at the end) or replaces its value; settings not sent are left alone.
+        Use this to save a settings form in one call. Nothing is saved if any entry is invalid.
+      operationId: mergeSettings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SettingList" }
+            example: [ { key: filingStatus, value: MFJ }, { key: householdIncome, value: 195000 } ]
+      responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "200":
+          description: Saved; returns every setting.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SettingList" }
+        "400":
+          description: Bad JSON, a missing/invalid key, a missing value, or a duplicate key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /settings/{key}:
+    parameters:
+      - name: key
+        in: path
+        required: true
+        description: Letters, digits, `.`, `_` and `-` only; case-sensitive.
+        schema: { type: string, maxLength: 200, pattern: "^[A-Za-z0-9._-]+$" }
+    get:
+      tags: [settings]
+      summary: Get one setting
+      operationId: getSetting
+      responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "200":
+          description: The setting.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Setting" }
+        "404":
+          description: No setting with that key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    put:
+      tags: [settings]
+      summary: Set one setting
+      description: Adds the setting (at the end) or replaces its value. Other settings are untouched.
+      operationId: setSetting
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value: { description: "Any JSON value, including null." }
+            example: { value: 185000 }
+      responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "200":
+          description: The setting existed; its value was replaced.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Setting" }
+        "201":
+          description: The setting was added.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Setting" }
+        "400":
+          description: Invalid key, no `value` property, or bad JSON.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    delete:
+      tags: [settings]
+      summary: Remove one setting
+      operationId: deleteSetting
+      responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "204":
+          description: Removed.
+        "404":
+          description: No setting with that key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /zestimate:
+    get:
+      tags: [property]
+      summary: Saved Zestimates (no APIllow call)
+      description: |
+        The service looks up every address in the `zestimateAddresses` setting daily at 06:00 (via
+        APIllow, a Zillow data API) and saves the results with timestamps. This only reads those
+        saved results, so it's free and fast. To track an address, add it to that setting
+        (`PUT /settings/zestimateAddresses` with `{"value": ["street, city, ST ZIP", ...]}`).
+
+        With `address`: that address's saved result (404 if none yet). Without it: every saved
+        result plus run status.
+      operationId: getZestimates
+      parameters:
+        - name: address
+          in: query
+          description: Street address as "street, city, state ZIP". Matching ignores case and spacing.
+          schema: { type: string }
+          example: 1874 Bromton Dr, Lyndhurst, OH 44124
+        - name: full
+          in: query
+          schema: { type: boolean, default: false }
+          description: Include APIllow's whole property record in `property`.
+      responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "200":
+          description: The saved result (with address), or all results plus run status (without).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/Zestimate"
+                  - $ref: "#/components/schemas/ZestimateList"
+        "400":
+          description: An empty address.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: Nothing saved for that address yet (or it isn't in the zestimateAddresses setting). The message says which.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /zestimate/refresh:
+    post:
+      tags: [property]
+      summary: Look up every tracked address now (uses APIllow quota)
+      description: Runs in the background; poll `GET /zestimate` until `running` is false. 409 while a run is in progress.
+      operationId: refreshZestimates
+      responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "202":
+          description: Started.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ZestimateList" }
+        "409":
+          description: A run is already in progress.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ZestimateList" }
+
+  /zestimate/usage:
+    get:
+      tags: [property]
+      summary: APIllow plan and remaining monthly lookups
+      description: APIllow's own usage report, passed through. Doesn't use quota.
+      operationId: getZestimateUsage
+      responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "200":
+          description: Usage, e.g. `plan`, `monthly_limit`, `used_this_month`, `remaining`, `billing_period_end`.
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "502":
+          description: APIllow refused the key or couldn't be reached.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: No APIllow API key is configured.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
 components:
   securitySchemes:
     ApiKey:
@@ -614,6 +850,78 @@ components:
       properties:
         merchantId: { type: string, minLength: 1, maxLength: 200, description: "Matches transactions[].merchantId." }
         category: { type: string, minLength: 1, maxLength: 100, description: "The user's category name (free text)." }
+
+    Zestimate:
+      type: object
+      properties:
+        address: { type: string, description: "The address as written in the setting." }
+        tracked: { type: boolean, description: "Still in the zestimateAddresses setting (removed addresses keep their saved data)." }
+        fetchedAt: { type: [string, "null"], format: date-time, description: "When these values were looked up." }
+        zpid: { type: [integer, "null"], description: "Zillow property ID." }
+        zestimate: { type: [number, "null"], description: "Estimated market value, USD. Null for homes listed for sale (use price)." }
+        rentZestimate: { type: [number, "null"], description: "Estimated monthly rent, USD." }
+        price: { type: [number, "null"], description: "List price when for sale." }
+        lastSoldPrice: { type: [number, "null"] }
+        lastSoldDate: { type: [string, "null"] }
+        taxAssessedValue: { type: [number, "null"] }
+        homeStatus: { type: [string, "null"], example: SOLD }
+        streetAddress: { type: [string, "null"] }
+        city: { type: [string, "null"] }
+        state: { type: [string, "null"] }
+        zipcode: { type: [string, "null"] }
+        bedrooms: { type: [number, "null"] }
+        bathrooms: { type: [number, "null"] }
+        livingArea: { type: [number, "null"], description: "Square feet." }
+        yearBuilt: { type: [integer, "null"] }
+        lastAttemptAt: { type: [string, "null"], format: date-time }
+        lastError: { type: [string, "null"], description: "Why the latest attempt failed; the values above are still from fetchedAt." }
+        history:
+          type: array
+          description: One entry per successful lookup, oldest first.
+          items:
+            type: object
+            properties:
+              fetchedAt: { type: string, format: date-time }
+              zestimate: { type: [number, "null"] }
+              rentZestimate: { type: [number, "null"] }
+              price: { type: [number, "null"] }
+        property:
+          type: [object, "null"]
+          additionalProperties: true
+          description: APIllow's whole property record (50+ fields) when full=true; otherwise null.
+
+    ZestimateList:
+      type: object
+      properties:
+        addressesSetting: { type: string, example: zestimateAddresses, description: "The /settings key listing the tracked addresses." }
+        dailyAt: { type: [string, "null"], example: "06:00" }
+        nextScheduledRun: { type: [string, "null"], format: date-time }
+        running: { type: boolean }
+        lastRun:
+          type: [object, "null"]
+          properties:
+            trigger: { type: string, enum: [schedule, startup, manual] }
+            started: { type: string, format: date-time }
+            finished: { type: string, format: date-time }
+            summary: { type: string }
+            error: { type: [string, "null"], description: "Set when the whole run couldn't work (no addresses, no key, quota used up)." }
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/Zestimate" }
+
+    Setting:
+      type: object
+      required: [key, value]
+      properties:
+        key: { type: string, minLength: 1, maxLength: 200, pattern: "^[A-Za-z0-9._-]+$", description: "Case-sensitive." }
+        value:
+          description: Any JSON (string, number, boolean, null, object or array), stored and returned exactly as sent.
+
+    SettingList:
+      type: array
+      maxItems: 10000
+      description: Each key appears at most once.
+      items: { $ref: "#/components/schemas/Setting" }
 
     MerchantCategoryList:
       type: array

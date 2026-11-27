@@ -5,6 +5,9 @@ import {
   getAccounts,
   getCategories,
   getInstitutionRefreshStatus,
+  getSettings,
+  getZestimates,
+  saveSettings,
   getNetWorthHistory,
   getSummary,
   getTransactions,
@@ -13,9 +16,22 @@ import {
 import { clearApiKey, getApiKey, setApiKey } from "./auth";
 import { confirmDialog } from "./confirm";
 import { setAccountHealth } from "./health";
+import { computeDti } from "./dti";
+import { applyHomeValue, type HomeState } from "./homevalue";
+import {
+  appFieldsHtml,
+  newListRowHtml,
+  readAppForm,
+  relabelList,
+  sameValues,
+  settingsFromValues,
+  valuesFromSettings,
+  type AppValues,
+} from "./appsettings";
 import { riStatusHtml, settingsShellHtml, type RiView } from "./settings";
 import {
   applySelection,
+  applyDti,
   applyTrends,
   dashboardHtml,
   errorHtml,
@@ -25,6 +41,7 @@ import {
   loadingHtml,
   opensDetail,
   type Category,
+  type DtiState,
 } from "./dashboard";
 import {
   accountScreenHtml,
@@ -68,7 +85,7 @@ import { mountFilterBox, type FilterState } from "./filterbox";
 import { dateTime, esc, timeAgo } from "./format";
 import { icons } from "./icons";
 import { clearTrends, ensureTrends, trendState } from "./trends";
-import type { InstitutionRefreshStatus, Summary, Transaction } from "./types";
+import type { InstitutionRefreshStatus, Summary, Transaction, ZestimateList } from "./types";
 
 /** The service saves every 15 minutes; flag data older than this as stale. */
 const STALE_AFTER_MS = 30 * 60 * 1000;
@@ -150,6 +167,13 @@ const categories = cached(() => getCategories(), Number.POSITIVE_INFINITY);
 function clearData(): void {
   summary = null;
   setAccountHealth(null);
+  app.saved = null;
+  app.savedAt = null;
+  dtiOpen = false;
+  dtiProblem = null;
+  homeData = null;
+  homeOpen = false;
+  homeProblem = null;
   clearTrends();
   balanceHistory.clear();
   transactions.clear();
@@ -222,6 +246,8 @@ async function load(showSkeleton: boolean): Promise<void> {
     applySelection(content, selected);
     renderTrends();
     if (selected === "investments") loadTrends(false);
+    void loadDti();
+    void loadHome();
     applyRoute(false);
   } catch (err) {
     if (ctrl.signal.aborted) return;
@@ -378,6 +404,7 @@ function applyRoute(animate: boolean): void {
     if (entering) {
       void show("settings", animate);
       void checkRiStatus(false);
+      void loadAppSettings();
     }
     return;
   }
@@ -744,6 +771,247 @@ async function startRi(): Promise<void> {
   }
 }
 
+// ---------- Settings: household details (the service's /settings store) ----------
+
+const app: {
+  /** What the service has saved, as form values; null until loaded. */
+  saved: AppValues | null;
+  savedAt: Date | null;
+  loading: boolean;
+  saving: boolean;
+  saveProblem: string | null;
+} = { saved: null, savedAt: null, loading: false, saving: false, saveProblem: null };
+
+const appForm = (): HTMLFormElement | null => settingsScreen.querySelector<HTMLFormElement>("[data-form='app-settings']");
+
+const errText = (err: unknown): string =>
+  err instanceof ApiError && err.kind === "network" ? "couldn't reach the service." : err instanceof Error ? err.message : String(err);
+
+/** Save button and the "Unsaved changes" / "Saved" line. */
+function drawAppState(): void {
+  const form = appForm();
+  if (!form) return;
+  const dirty = app.saved !== null && !sameValues(readAppForm(form).values, app.saved);
+  const save = form.querySelector<HTMLButtonElement>("[data-role='app-save']")!;
+  save.disabled = !app.saved || app.saving || !dirty;
+  save.textContent = app.saving ? "Saving…" : "Save settings";
+  const state = form.querySelector<HTMLElement>("[data-role='app-state']")!;
+  state.classList.toggle("is-error", Boolean(app.saveProblem));
+  state.classList.toggle("is-dirty", !app.saveProblem && dirty);
+  state.textContent = app.saveProblem
+    ? app.saveProblem
+    : app.saving
+      ? ""
+      : dirty
+        ? "Unsaved changes"
+        : app.savedAt
+          ? `Saved ${timeAgo(app.savedAt)}`
+          : "";
+}
+
+function showFieldErrors(form: HTMLFormElement, errors: Record<string, string>): void {
+  for (const el of form.querySelectorAll<HTMLElement>("[data-error-for]")) {
+    const key = el.dataset.errorFor ?? "";
+    const msg = errors[key];
+    el.textContent = msg ?? "";
+    el.hidden = !msg;
+    for (const input of form.querySelectorAll<HTMLInputElement>(`[name="${key}"]`)) {
+      input.classList.toggle("is-invalid", Boolean(msg));
+      if (msg) input.setAttribute("aria-invalid", "true");
+      else input.removeAttribute("aria-invalid");
+    }
+  }
+}
+
+let settingsInFlight: Promise<void> | null = null;
+
+/**
+ * Fetch the saved settings into `app.saved` (also used by the Net worth card's debt-to-income).
+ * If the Settings form is showing and has no unsaved edits, it's redrawn with the new values.
+ * `force`: fetch even if already loaded (picks up changes made on another device).
+ */
+function ensureSettings(force: boolean): Promise<void> {
+  if (settingsInFlight) return settingsInFlight;
+  if (app.saved && !force) return Promise.resolve();
+  app.loading = true;
+  settingsInFlight = getSettings()
+    .then(({ data }) => {
+      const form = appForm();
+      const fields = form?.querySelector<HTMLElement>("[data-role='app-fields']");
+      const showing = fields && !fields.querySelector(".skeleton, .inline-error");
+      const dirty = Boolean(showing && app.saved && !sameValues(readAppForm(form!).values, app.saved));
+      if (dirty) return; // don't pull values out from under unsaved edits
+      app.saved = valuesFromSettings(data ?? []);
+      if (fields) fields.innerHTML = appFieldsHtml(app.saved);
+    })
+    .finally(() => {
+      app.loading = false;
+      settingsInFlight = null;
+      drawAppState();
+    });
+  return settingsInFlight;
+}
+
+/** Settings screen: fill the form (from memory if already loaded), showing a retry on failure. */
+async function loadAppSettings(): Promise<void> {
+  const fields = settingsScreen.querySelector<HTMLElement>("[data-role='app-fields']");
+  if (!fields || !getApiKey()) return;
+  if (app.saved && fields.querySelector(".skeleton, .inline-error")) {
+    fields.innerHTML = appFieldsHtml(app.saved);
+    drawAppState();
+    return;
+  }
+  try {
+    await ensureSettings(false);
+  } catch (err) {
+    if (handleKeyError(err)) return;
+    fields.innerHTML = `<p class="inline-error">${icons.alert}<span>Couldn't load your settings: ${esc(errText(err))}
+      <button type="button" class="link-btn" data-action="app-retry">Try again</button></span></p>`;
+  }
+}
+
+// ---------- Net worth card: debt-to-income ----------
+
+let dtiOpen = false;
+/** Why the ratio can't be shown (failed request), if so. */
+let dtiProblem: string | null = null;
+
+function dtiState(): DtiState {
+  if (dtiProblem) return { kind: "error", message: dtiProblem };
+  if (!app.saved) return { kind: "loading" };
+  const income = app.saved.householdIncome;
+  if (typeof income !== "number" || income <= 0) return { kind: "no-income" };
+  const tx = transactions.peek()?.data.spData;
+  if (!tx || !summary) return { kind: "loading" };
+  const accounts = [...(summary.empowerAccounts ?? []), ...(summary.aggregatedAccounts ?? [])];
+  const dti = computeDti(tx.transactions ?? [], categories.peek()?.data.spData ?? null, accounts, income, {
+    start: tx.startDate,
+    end: tx.endDate,
+  });
+  return { kind: "ready", dti };
+}
+
+function renderDti(): void {
+  applyDti(content, dtiState(), dtiOpen);
+}
+
+// ---------- Net worth card: Zestimate ----------
+
+let homeData: ZestimateList | null = null;
+let homeOpen = false;
+let homeProblem: string | null = null;
+
+function homeState(): HomeState {
+  if (homeProblem) return { kind: "error", message: homeProblem };
+  if (!homeData || (!app.saved && app.loading)) return { kind: "loading" };
+  const saved = app.saved?.zestimateAddresses;
+  const addresses = Array.isArray(saved) ? saved : [];
+  const tracked = (homeData.results ?? []).filter((r) => r.tracked !== false);
+  if (!addresses.length && !tracked.length) return { kind: "none" };
+  return { kind: "ready", list: homeData, addresses };
+}
+
+function renderHome(): void {
+  applyHomeValue(content, homeState(), homeOpen);
+}
+
+/** Saved lookups only: GET /zestimate never uses APIllow quota. */
+async function loadHome(): Promise<void> {
+  renderHome();
+  try {
+    homeData = (await getZestimates()).data ?? {};
+    homeProblem = null;
+  } catch (err) {
+    if (handleKeyError(err)) return;
+    homeProblem =
+      err instanceof ApiError && err.kind === "not-found"
+        ? "This service doesn't support Zestimates yet (needs API 1.8 or later)."
+        : `Couldn't load Zestimates: ${errText(err)}`;
+  }
+  renderHome();
+}
+
+/** Needs the household income (settings) and the saved transactions; categories help but are optional. */
+async function loadDti(): Promise<void> {
+  renderDti();
+  const [settings, txns] = await Promise.allSettled([
+    // Re-read the settings on each data load unless the Settings form is open (it manages its own copy).
+    ensureSettings(current !== "settings"),
+    transactions.get(),
+    categories.get(),
+  ]);
+  renderHome(); // its address list comes from the settings
+  dtiProblem = null;
+  for (const r of [settings, txns]) {
+    if (r.status === "rejected") {
+      if (handleKeyError(r.reason)) return;
+      dtiProblem = r === settings ? `Couldn't load your household income: ${errText(r.reason)}` : `Couldn't load transactions: ${errText(r.reason)}`;
+    }
+  }
+  renderDti();
+}
+
+async function submitAppSettings(form: HTMLFormElement): Promise<void> {
+  if (app.saving || !app.saved) return;
+  const { values, errors } = readAppForm(form);
+  showFieldErrors(form, errors);
+  if (Object.keys(errors).length) {
+    form.querySelector<HTMLInputElement>(".is-invalid")?.focus();
+    return;
+  }
+  app.saving = true;
+  app.saveProblem = null;
+  drawAppState();
+  try {
+    const sent = settingsFromValues(values);
+    const { data } = await saveSettings(sent);
+    app.saved = valuesFromSettings(data ?? sent);
+    app.savedAt = new Date();
+    renderDti(); // income may have changed
+    renderHome(); // addresses may have changed
+    // Redraw from what was saved: blank rows dropped, amounts formatted.
+    const fields = form.querySelector<HTMLElement>("[data-role='app-fields']");
+    if (fields) fields.innerHTML = appFieldsHtml(app.saved);
+  } catch (err) {
+    if (handleKeyError(err)) return;
+    app.saveProblem = `Couldn't save: ${errText(err)}`;
+  } finally {
+    app.saving = false;
+    drawAppState();
+  }
+}
+
+/** + : add an empty row to a list field and focus it. */
+function addListRow(key: string): void {
+  const list = appForm()?.querySelector<HTMLElement>(`[data-list="${key}"]`);
+  if (!list) return;
+  const index = list.querySelectorAll(".list-row").length;
+  list.insertAdjacentHTML("beforeend", newListRowHtml(key, index));
+  relabelList(list);
+  list.querySelector<HTMLInputElement>(".list-row:last-child input")?.focus();
+  drawAppState();
+}
+
+/** ×: remove a row (the last remaining row is just cleared). */
+function removeListRow(btn: HTMLElement): void {
+  const row = btn.closest<HTMLElement>(".list-row");
+  const list = row?.closest<HTMLElement>("[data-list]");
+  if (!row || !list) return;
+  const rows = [...list.querySelectorAll<HTMLElement>(".list-row")];
+  const i = rows.indexOf(row);
+  if (rows.length === 1) {
+    row.querySelector("input")!.value = "";
+    relabelList(list);
+    row.querySelector("input")!.focus();
+  } else {
+    row.remove();
+    relabelList(list);
+    const next = list.querySelectorAll<HTMLInputElement>(".list-row input")[Math.max(0, i - 1)];
+    next?.focus();
+  }
+  drawAppState();
+}
+
 /** Re-read the saved data (no Empower call) and make other screens fetch theirs again. */
 function reloadData(): void {
   void load(false);
@@ -1025,6 +1293,33 @@ root.addEventListener("click", (e) => {
     return;
   }
 
+  const listAdd = el.closest<HTMLElement>("[data-list-add]");
+  if (listAdd) {
+    addListRow(listAdd.dataset.listAdd ?? "");
+    return;
+  }
+  const listRemove = el.closest<HTMLElement>("[data-list-remove]");
+  if (listRemove) {
+    removeListRow(listRemove);
+    return;
+  }
+  if (el.closest("[data-action='toggle-home']")) {
+    homeOpen = !homeOpen;
+    renderHome();
+    content.querySelector<HTMLElement>("[data-action='toggle-home']")?.focus();
+    return;
+  }
+  if (el.closest("[data-action='toggle-dti']")) {
+    dtiOpen = !dtiOpen;
+    renderDti();
+    content.querySelector<HTMLElement>("[data-action='toggle-dti']")?.focus();
+    return;
+  }
+  if (el.closest("[data-action='app-retry']")) {
+    void loadAppSettings();
+    return;
+  }
+
   if (el.closest("[data-action='refresh-institutions']")) {
     e.preventDefault();
     void startRi();
@@ -1238,7 +1533,39 @@ root.addEventListener("change", (e) => {
   }
 });
 
+// Settings form: track unsaved changes, clear a field's error once it's edited.
+root.addEventListener("input", (e) => {
+  const input = e.target as HTMLInputElement;
+  const form = input.closest<HTMLFormElement>("[data-form='app-settings']");
+  if (!form) return;
+  if (input.classList.contains("is-invalid")) {
+    const errors: Record<string, string> = {};
+    for (const el of form.querySelectorAll<HTMLElement>("[data-error-for]:not([hidden])")) {
+      if (el.dataset.errorFor !== input.name) errors[el.dataset.errorFor ?? ""] = el.textContent ?? "";
+    }
+    showFieldErrors(form, errors);
+  }
+  const list = input.closest<HTMLElement>("[data-list]");
+  if (list) relabelList(list);
+  app.saveProblem = null;
+  drawAppState();
+});
+
+// Money fields: show "185000" as "185,000" once you leave the box.
+root.addEventListener("focusout", (e) => {
+  const input = e.target as HTMLInputElement;
+  if (!input.matches?.("[data-form='app-settings'] input[data-money]")) return;
+  const n = Number(input.value.replace(/[$,\s]/g, ""));
+  if (input.value.trim() && Number.isFinite(n) && n >= 0) input.value = n.toLocaleString("en-US", { maximumFractionDigits: 2 });
+});
+
 root.addEventListener("submit", (e) => {
+  const settingsForm = (e.target as Element).closest<HTMLFormElement>("[data-form='app-settings']");
+  if (settingsForm) {
+    e.preventDefault();
+    void submitAppSettings(settingsForm);
+    return;
+  }
   const form = (e.target as Element).closest<HTMLFormElement>("[data-form='api-key']");
   if (!form) return;
   e.preventDefault();
@@ -1250,7 +1577,10 @@ root.addEventListener("submit", (e) => {
 });
 
 // Keep "saved x minutes ago" current, and re-read the file periodically.
-setInterval(renderFreshness, 30_000);
+setInterval(() => {
+  renderFreshness();
+  if (current === "settings") drawAppState();
+}, 30_000);
 setInterval(() => {
   if (document.visibilityState === "visible" && getApiKey()) void load(false);
 }, POLL_MS);

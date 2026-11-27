@@ -5,6 +5,8 @@ import type {
   Categories,
   InstitutionRefreshStatus,
   MerchantCategory,
+  Setting,
+  ZestimateList,
   NetWorthHistory,
   Performance,
   Summary,
@@ -153,6 +155,25 @@ export function startInstitutionRefresh(force: boolean): Promise<Fetched<Institu
 /** Progress or result of the last institution refresh. Doesn't call Empower. */
 export function getInstitutionRefreshStatus(signal?: AbortSignal): Promise<Fetched<InstitutionRefreshStatus>> {
   return getJson<InstitutionRefreshStatus>("/refresh-institutions", signal);
+}
+
+// ---------- App settings (saved on the service; the same on every device) ----------
+
+/** Every app setting (`[]` when none are saved). */
+export function getSettings(signal?: AbortSignal): Promise<Fetched<Setting[]>> {
+  return getJson<Setting[]>("/settings", signal);
+}
+
+/** Add or change the settings sent; others are left alone. Returns every setting. Nothing is saved if any entry is invalid. */
+export function saveSettings(settings: Setting[]): Promise<Fetched<Setting[]>> {
+  return request<Setting[]>("PATCH", "/settings", settings);
+}
+
+// ---------- Property values (Zillow Zestimate via APIllow) ----------
+
+/** Saved Zestimates for every address the service tracks. Reads saved results only (no APIllow quota). */
+export function getZestimates(signal?: AbortSignal): Promise<Fetched<ZestimateList>> {
+  return getJson<ZestimateList>("/zestimate", signal);
 }
 
 // ---------- Your merchant categories (the only thing the app saves on the service) ----------

@@ -332,9 +332,63 @@ a.icon-btn { text-decoration: none; }
   margin: 2px 0 0;
 }
 .hero__cents { font-size: 0.5em; opacity: 0.65; letter-spacing: 0; }
-.hero__split { display: flex; gap: 36px; margin-top: 14px; }
+.hero__split { display: flex; flex-wrap: wrap; gap: 8px 36px; margin-top: 14px; }
 .hero__split span { display: block; font-size: 12.5px; opacity: 0.75; }
 .hero__split strong { font-size: 18px; font-variant-numeric: tabular-nums; }
+/* Debt-to-income: a button that opens the breakdown */
+.hero__pending { opacity: 0.6; }
+.hero__link { display: inline-block; color: var(--accent); font-size: 15px; font-weight: 600; line-height: 27px; text-decoration: none; }
+.hero__link:hover { text-decoration: underline; }
+.hero__dti-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.hero__dti-btn svg { width: 16px; height: 16px; opacity: 0.7; transition: transform 0.2s; }
+.hero__dti-btn:hover svg { opacity: 1; }
+.hero__dti.is-open .hero__dti-btn svg { transform: rotate(180deg); }
+.hero__dti-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+.dti-panel {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(4, 8, 20, 0.35);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+  font-size: 13.5px;
+  animation: txn-open 0.18s ease-out;
+}
+.dti-panel__rows { display: flex; flex-wrap: wrap; gap: 10px 36px; margin: 0; }
+.dti-panel__rows dt { opacity: 0.75; font-size: 12.5px; }
+.dti-panel__rows dd { margin: 2px 0 0; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.dti-panel__rows small { margin-left: 6px; opacity: 0.7; font-size: 12px; font-weight: 400; }
+.dti-panel__sources { display: grid; gap: 6px; margin: 14px 0 0; padding: 12px 0 0; border-top: 1px solid rgba(255, 255, 255, 0.1); }
+.dti-panel__sources li { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.dti-panel__sources li span { min-width: 0; overflow-wrap: anywhere; }
+.dti-panel__sources small { margin-left: 8px; opacity: 0.65; font-size: 12px; }
+.dti-panel__sources strong { font-size: 14px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dti-panel__empty { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, 0.1); }
+.dti-panel__note { margin: 12px 0 0; opacity: 0.7; font-size: 12.5px; }
+/* Zestimate breakdown: one row per address */
+.home-rows { display: grid; gap: 10px; margin: 0; }
+.home-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.home-row + .home-row { padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, 0.08); }
+.home-row__text { min-width: 0; }
+.home-row__addr { font-weight: 600; overflow-wrap: anywhere; }
+.home-row__sub { opacity: 0.7; font-size: 12px; }
+.home-row__warn { margin-top: 2px; color: var(--warn); font-size: 12px; }
+.home-row__right { display: grid; justify-items: end; flex: none; text-align: right; }
+.home-row__value { font-size: 15px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.home-row__value--pending { opacity: 0.6; font-weight: 600; }
+.home-row__change { font-size: 12px; font-weight: 600; white-space: nowrap; }
+.home-panel__warn { display: flex; align-items: center; gap: 8px; margin: 12px 0 0; color: var(--warn); font-size: 12.5px; }
+.home-panel__warn svg { flex: none; width: 15px; height: 15px; }
 
 /* ---------- Stat tiles ---------- */
 .tiles {
@@ -1086,6 +1140,69 @@ a.icon-btn { text-decoration: none; }
 }
 .btn--danger-ghost:hover { background: rgba(255, 130, 150, 0.14); }
 
+/* Household details form */
+.app-form { display: grid; gap: 4px; }
+.app-fields { display: grid; gap: 20px; }
+.app-field {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 8px 24px;
+  align-items: start;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+/* A <legend> won't sit in a grid cell; float it into the first column. */
+fieldset.app-field { display: block; }
+fieldset.app-field > .app-field__label { float: left; width: 200px; margin-right: 24px; }
+fieldset.app-field > .app-field__control { margin-left: 224px; }
+.app-field__label { padding: 10px 0 0; color: var(--text); font-size: 14px; font-weight: 600; }
+.app-field__control { min-width: 0; max-width: 620px; }
+.app-field__help { margin: 8px 0 0; color: var(--muted); font-size: 12.5px; }
+.field-error { margin: 8px 0 0; color: var(--neg); font-size: 12.5px; }
+.input {
+  width: 100%;
+  height: 42px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--pressed);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+.input::placeholder { color: var(--faint); opacity: 1; }
+.input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.input.is-invalid { box-shadow: inset 0 0 0 1px rgba(255, 130, 150, 0.65), inset 0 0 0 999px rgba(0, 0, 0, 0.3); }
+.money { position: relative; max-width: 260px; }
+.money__sym { position: absolute; top: 50%; left: 14px; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
+.money .input { padding-left: 28px; font-variant-numeric: tabular-nums; }
+.list-rows { display: grid; gap: 8px; }
+.list-row { display: flex; align-items: center; gap: 8px; }
+.icon-btn--sm { flex: none; width: 36px; height: 36px; }
+.icon-btn--sm svg { width: 16px; height: 16px; }
+.icon-btn--remove { color: var(--muted); }
+.icon-btn--remove:hover { color: var(--neg); }
+.btn--sm { height: 36px; padding: 0 14px 0 12px; font-size: 13.5px; }
+.btn--sm svg { width: 16px; height: 16px; }
+.list-add { margin-top: 10px; }
+.app-form__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px 16px;
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+.app-form__state { margin-right: auto; color: var(--muted); font-size: 13px; }
+.app-form__state.is-dirty { color: var(--warn); }
+.app-form__state.is-error { color: var(--neg); }
+.skeleton--form { min-height: 0; height: 150px; border-radius: 12px; background: rgba(255, 255, 255, 0.03); }
+
 /* Institution refresh status */
 .ri-status { padding-top: 18px; border-top: 1px solid var(--border); }
 .ri-status .inline-error { padding: 0 0 12px; }
@@ -1330,6 +1447,12 @@ a.icon-btn { text-decoration: none; }
   .setting, .setting__row { flex-direction: column; align-items: stretch; gap: 18px; }
   .setting__actions { min-width: 0; }
   .ri-details { grid-template-columns: 1fr 1fr; gap: 12px 16px; }
+  .app-field { grid-template-columns: 1fr; }
+  fieldset.app-field > .app-field__label { float: none; width: auto; margin: 0 0 8px; }
+  fieldset.app-field > .app-field__control { margin-left: 0; }
+  .app-field__label { padding-top: 0; }
+  .money { max-width: none; }
+  .app-form__foot .btn { flex: 1 1 100%; justify-content: center; }
   .ri-inst { padding: 10px 12px; }
   .ri-panel__head { padding: 12px 14px; }
   .ri-panel__counts { order: 3; width: 100%; margin-left: 0; gap: 2px 12px; }
@@ -1350,6 +1473,10 @@ a.icon-btn { text-decoration: none; }
   .grid, .tiles, .groups { gap: 18px; }
   .card { padding: 20px; }
   .tile { padding: 16px; }
+  .hero__split { gap: 8px 22px; }
+  .dti-panel__rows { gap: 10px 22px; }
+  .home-row__right { max-width: 45%; }
+  .home-row__change { white-space: normal; }
   .tile__value { font-size: 19px; }
   .tile__icon { width: 34px; height: 34px; border-radius: 10px; margin-bottom: 8px; }
   .tile__icon svg { width: 17px; height: 17px; }

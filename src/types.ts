@@ -237,6 +237,44 @@ export interface InstitutionRefreshStatus {
   institutions?: InstitutionResult[];
 }
 
+/** One app setting saved on the service (`/settings`). `value` is any JSON, returned exactly as sent. */
+export interface Setting {
+  key: string;
+  value: unknown;
+}
+
+/** One address's saved Zillow values (`GET /zestimate`). */
+export interface Zestimate {
+  /** As written in the zestimateAddresses setting. */
+  address?: string;
+  /** Still in the setting (removed addresses keep their saved data). */
+  tracked?: boolean;
+  fetchedAt?: string | null;
+  zpid?: number | null;
+  /** Estimated market value. Null for homes listed for sale (use price). */
+  zestimate?: number | null;
+  /** Estimated monthly rent. */
+  rentZestimate?: number | null;
+  /** List price when for sale. */
+  price?: number | null;
+  homeStatus?: string | null;
+  lastAttemptAt?: string | null;
+  /** Why the latest attempt failed; the values are still from fetchedAt. */
+  lastError?: string | null;
+  /** One entry per successful lookup, oldest first. */
+  history?: { fetchedAt?: string; zestimate?: number | null; rentZestimate?: number | null; price?: number | null }[];
+}
+
+/** `GET /zestimate` without an address: every saved result plus run status. Never calls APIllow. */
+export interface ZestimateList {
+  addressesSetting?: string;
+  dailyAt?: string | null;
+  nextScheduledRun?: string | null;
+  running?: boolean;
+  lastRun?: { trigger?: string; started?: string; finished?: string; summary?: string; error?: string | null } | null;
+  results?: Zestimate[];
+}
+
 export interface ApiErrorBody {
   error: string;
   httpStatus?: number | null;

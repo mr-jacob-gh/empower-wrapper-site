@@ -1,8 +1,9 @@
-// Settings screen: reload saved data, refresh institutions (with status), forget the API key.
+// Settings screen: household details, reload saved data, refresh institutions (with status), forget the API key.
 
 import { dateTime, esc, timeAgo } from "./format";
 import { icons } from "./icons";
 import type { InstitutionRefreshStatus, InstitutionResult } from "./types";
+import { appSettingsCardHtml } from "./appsettings";
 
 export function settingsShellHtml(apiBase: string): string {
   return `
@@ -13,6 +14,8 @@ export function settingsShellHtml(apiBase: string): string {
         <div class="muted small">Refresh your data and manage this browser's connection to the service.</div>
       </div>
     </div>
+
+    ${appSettingsCardHtml()}
 
     <section class="card setting" aria-labelledby="set-reload">
       <div class="setting__text">
