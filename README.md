@@ -138,8 +138,13 @@ the ratio can be higher than a lender's, which uses the minimum payment.
 Loan rows on the Summary page show **Est. payoff Mon YYYY**; the loan's account screen shows the
 date, time left, and the payment and rate it used (`src/payoff.ts`).
 
-- **Payment:** the median of the monthly totals paid into the loan account over the last 3 complete
-  months (needs a payment in at least 2 of them). With a rate from Settings and balance history, the
+- **Payments found:** money out of your other accounts (not loans or credit cards) that either
+  mentions the loan's last digits (e.g. "…2328" from "Ending in 2328"), or is categorized as a
+  mortgage payment (a loan payment, for other loans) and either it's your only loan of that kind or
+  the description names the lender (e.g. "Coastal"). The loan's own transactions aren't used. The
+  account screen lists the accounts the payments came from.
+- **Payment:** the median of the monthly totals of those payments over the last 3 complete months
+  (needs a payment in at least 2 of them). With a rate from Settings and balance history, the
   payment is principal + interest instead (how much the balance fell + that month's interest),
   which leaves out escrow.
 - **Rate:** Settings → Household details → Loan interest rates, if entered. Otherwise estimated from

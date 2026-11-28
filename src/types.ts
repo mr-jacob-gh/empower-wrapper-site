@@ -15,6 +15,8 @@ export type AccountGroup =
   | null;
 
 export interface Account {
+  /** e.g. "CHECKING", "MORTGAGE", "TYPE_401K"; can be null. */
+  accountType?: string | null;
   userAccountId?: number;
   accountId?: string;
   name?: string;

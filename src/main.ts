@@ -17,7 +17,7 @@ import { clearApiKey, getApiKey, setApiKey } from "./auth";
 import { confirmDialog } from "./confirm";
 import { setAccountHealth } from "./health";
 import { computeDti } from "./dti";
-import { computePayoff, type Payoff } from "./payoff";
+import { computePayoff, findLoanPayments, type Payoff } from "./payoff";
 import { applyHomeValue, type HomeState } from "./homevalue";
 import {
   type AppContext,
@@ -967,11 +967,26 @@ function payoffMap(): Map<number, Payoff> | null {
   const loans = loanAccounts();
   const history = balanceHistory.peek()?.data ?? null;
   if (!history && !payoffNoHistory) return null;
+  // Payments come from your other accounts (not loans or credit cards).
+  const all = [...(summary.empowerAccounts ?? []), ...(summary.aggregatedAccounts ?? [])];
+  const kind = new Map(all.map((a) => [a.userAccountId, groupInfo(a).category]));
+  const isPayingAccount = (id: number | undefined) => {
+    const k = kind.get(id);
+    return k !== undefined && k !== "loans" && k !== "credit";
+  };
+  const catName = new Map((categories.peek()?.data.spData ?? []).map((c) => [c.transactionCategoryId, c.name ?? ""]));
+  const categoryOf = (t: Transaction) => (t.categoryId !== undefined ? catName.get(t.categoryId) : undefined) ?? t.categoryName ?? "";
   const map = new Map<number, Payoff>();
   for (const a of loans) {
     map.set(
       a.userAccountId!,
-      computePayoff({ userAccountId: a.userAccountId!, balance: a.balance ?? 0, transactions: tx, history, savedRate: savedLoanRate(a.userAccountId!) }),
+      computePayoff({
+        userAccountId: a.userAccountId!,
+        balance: a.balance ?? 0,
+        payments: findLoanPayments(a, loans, tx, isPayingAccount, categoryOf),
+        history,
+        savedRate: savedLoanRate(a.userAccountId!),
+      }),
     );
   }
   return map;
@@ -991,7 +1006,7 @@ async function loadPayoffs(): Promise<void> {
   if (!loanAccounts().length) return;
   renderPayoffs();
   await ensureSettings(false).catch(() => {});
-  const [txns, history] = await Promise.allSettled([transactions.get(), balanceHistory.get()]);
+  const [txns, history] = await Promise.allSettled([transactions.get(), balanceHistory.get(), categories.get()]);
   payoffProblem = null;
   payoffNoHistory = false;
   if (txns.status === "rejected") {

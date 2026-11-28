@@ -343,21 +343,23 @@ function payoffDetailHtml(p: Payoff | undefined, problem: string | null): string
   if (!p) return problem ? `<span class="muted">Unavailable</span><small class="dd-sub">${esc(problem)}</small>` : `<span class="muted">Calculating…</span>`;
   const rate = (pRate: number, source: "settings" | "estimated") =>
     `${pctRate.format(pRate)}% ${source === "settings" ? "(from Settings)" : "(estimated from balance history)"}`;
+  const from = (names: string[]) => (names.length ? `<small class="dd-sub">Payments from ${esc(names.join(", "))}</small>` : "");
   switch (p.status) {
     case "ok":
       return `${esc(monthYear(p.date))} <span class="muted">(${esc(duration(p.months))})</span>
-        <small class="dd-sub">${esc(moneyCents(p.payment))}/mo${p.paymentKind === "principal-interest" ? " principal &amp; interest" : ""} at ${esc(rate(p.annualRate, p.rateSource))}</small>`;
+        <small class="dd-sub">${esc(moneyCents(p.payment))}/mo${p.paymentKind === "principal-interest" ? " principal &amp; interest" : ""} at ${esc(rate(p.annualRate, p.rateSource))}</small>${from(p.from)}`;
     case "paid":
       return "Paid off";
     case "no-payments":
       return `<span class="muted">Not enough payment history</span>
-        <small class="dd-sub">Needs payments into this account in at least 2 of the last 3 months.</small>`;
+        <small class="dd-sub">Needs payments to this loan from your other accounts in at least 2 of the last 3 months: a
+          transaction mentioning the loan's last digits, or categorized as a mortgage or loan payment.</small>${from(p.from)}`;
     case "need-rate":
       return `<a class="link" href="#/settings">Add the interest rate</a> to estimate
-        <small class="dd-sub">${esc(moneyCents(p.payment))}/mo paid; the rate couldn't be worked out from the balance history.</small>`;
+        <small class="dd-sub">${esc(moneyCents(p.payment))}/mo paid; the rate couldn't be worked out from the balance history.</small>${from(p.from)}`;
     case "never":
       return `<span class="warn-text">Payment doesn't cover the interest</span>
-        <small class="dd-sub">${esc(moneyCents(p.payment))}/mo${p.paymentKind === "principal-interest" ? " principal &amp; interest" : ""} at ${esc(rate(p.annualRate, p.rateSource))}</small>`;
+        <small class="dd-sub">${esc(moneyCents(p.payment))}/mo${p.paymentKind === "principal-interest" ? " principal &amp; interest" : ""} at ${esc(rate(p.annualRate, p.rateSource))}</small>${from(p.from)}`;
   }
 }
 
